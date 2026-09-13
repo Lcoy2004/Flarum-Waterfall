@@ -13,12 +13,14 @@ namespace Lcoy\Waterfall\Model;
 
 use Flarum\Database\AbstractModel;
 use Flarum\User\User;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Lcoy\Waterfall\Model\Concerns\VisibleToActor;
 
 class WaterfallImage extends AbstractModel
 {
+    use VisibleToActor;
+
     public const STATUS_PENDING = 'pending';
     public const STATUS_PUBLISHED = 'published';
     public const STATUS_FAILED = 'failed';
@@ -52,28 +54,6 @@ class WaterfallImage extends AbstractModel
     public function set(): BelongsTo
     {
         return $this->belongsTo(WaterfallSet::class, 'set_id');
-    }
-
-    /**
-     * Images the given actor is allowed to see: everything published, plus the
-     * actor's own pending/failed rows. The API resource and the searcher both
-     * go through this scope so the two can never drift apart.
-     */
-    public function scopeVisibleTo(Builder $query, User $actor): void
-    {
-        $status = $this->qualifyColumn('status');
-        $userId = $this->qualifyColumn('user_id');
-
-        $query->where(function (Builder $query) use ($actor, $status, $userId) {
-            $query->where($status, self::STATUS_PUBLISHED);
-
-            if ($actor->exists) {
-                $query->orWhere(function (Builder $query) use ($actor, $status, $userId) {
-                    $query->where($userId, $actor->id)
-                        ->whereIn($status, [self::STATUS_PENDING, self::STATUS_FAILED]);
-                });
-            }
-        });
     }
 
     /**

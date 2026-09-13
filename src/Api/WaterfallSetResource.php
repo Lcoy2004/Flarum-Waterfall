@@ -46,8 +46,8 @@ class WaterfallSetResource extends AbstractDatabaseResource
     /**
      * Everyone (including guests) sees sets with at least one published image;
      * pending and failed sets remain visible to their owner only. The rule
-     * itself lives on the model (scopeVisibleTo), shared with the searcher so
-     * the list endpoint and the resource can never disagree.
+     * itself lives in the VisibleToActor trait (scopeVisibleTo), shared with
+     * the searcher so the list endpoint and the resource can never disagree.
      */
     public function scope(Builder $query, Context $context): void
     {
