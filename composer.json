@@ -16,8 +16,8 @@
         }
     ],
     "support": {
-        "issues": "https://github.com/lcoy/waterfall/issues",
-        "source": "https://github.com/lcoy/waterfall"
+        "issues": "https://gitee.com/lcoy/Flarum-Waterfall/issues",
+        "source": "https://gitee.com/lcoy/Flarum-Waterfall"
     },
     "require": {
         "flarum/core": "^2.0.0"

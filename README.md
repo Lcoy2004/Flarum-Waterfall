@@ -346,7 +346,7 @@ saved through the admin UI. If you changed one directly in the database, run
 
 ## License
 
-MIT, as declared in `composer.json`.
+MIT — see [LICENSE](LICENSE).
 
 ---
 
@@ -658,4 +658,4 @@ HEIC 是最常被忽略的情况。
 
 ## 许可
 
-MIT,见 `composer.json` 声明。
+MIT,详见 [LICENSE](LICENSE)。
