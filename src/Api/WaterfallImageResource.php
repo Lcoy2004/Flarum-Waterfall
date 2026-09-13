@@ -220,7 +220,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
 
                         if ($counted) {
                             $image->increment('views_count');
-                            $this->incrementSetCounter($image, 'views_count', 1);
+                            $this->incrementSetViews($image);
 
                             // Coalesce score recalculation: without this, a
                             // popular image viewed by many distinct IPs would
@@ -363,7 +363,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
     }
 
     /**
-     * Apply a delta to one of the owning set's denormalised counters.
+     * Add one to the owning set's view counter.
      *
      * Only the view path calls this. Like/unlike always enqueue a score
      * recalculation that rewrites the set's counters from the images, so a
@@ -372,20 +372,13 @@ class WaterfallImageResource extends AbstractDatabaseResource
      * delta the set's total would trail every view in between — and stay
      * behind once the viewing stops.
      */
-    protected function incrementSetCounter(WaterfallImage $image, string $column, int $amount): void
+    protected function incrementSetViews(WaterfallImage $image): void
     {
         if (! $image->set_id) {
             return;
         }
 
-        $query = WaterfallSet::query()->whereKey($image->set_id);
-
-        if ($amount < 0) {
-            // Never let a counter go negative, even if it had drifted.
-            $query->where($column, '>', 0)->decrement($column, -$amount);
-        } else {
-            $query->increment($column, $amount);
-        }
+        WaterfallSet::query()->whereKey($image->set_id)->increment('views_count');
     }
 
     /**

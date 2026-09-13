@@ -19,7 +19,6 @@ use Flarum\Api\Sort\SortColumn;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Lcoy\Waterfall\Api\WaterfallImageResource;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallSet;
 use Tobyz\JsonApiServer\Context;
