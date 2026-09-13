@@ -13,11 +13,13 @@ lightbox, likes, tags and a recommendation feed.
 
 # English
 
-- **Package:** `lcoy/waterfall`
+- **Package:** [`lcoy/waterfall`](https://packagist.org/packages/lcoy/waterfall)
 - **Extension ID:** `lcoy-waterfall`
 - **Namespace:** `Lcoy\Waterfall`
 - **Forum route:** `/waterfall`
-- **Source:** <https://gitee.com/lcoy/Flarum-Waterfall>
+- **Source:** <https://gitee.com/lcoy/Flarum-Waterfall> (mirrored to
+  <https://github.com/Lcoy2004/Flarum-Waterfall>, which is what Packagist
+  tracks)
 
 ## What it does
 
@@ -68,11 +70,8 @@ The extension never hosts the final image itself.
 
 ## Installation
 
-The package is distributed from Gitee, so register it as a VCS repository first:
-
 ```bash
-composer config repositories.waterfall vcs https://gitee.com/lcoy/Flarum-Waterfall.git
-composer require lcoy/waterfall:"*@dev"
+composer require lcoy/waterfall
 ```
 
 Then enable it and run the migrations:
@@ -81,6 +80,21 @@ Then enable it and run the migrations:
 php flarum extension:enable lcoy-waterfall
 php flarum migrate
 ```
+
+### Installing without Packagist
+
+To track the repository directly instead — for example to pin to a branch — add
+it as a VCS repository:
+
+```bash
+composer config repositories.waterfall vcs https://gitee.com/lcoy/Flarum-Waterfall.git
+composer require lcoy/waterfall:"*@dev"
+```
+
+Tagged releases are also attached as a self-contained zip (no `vendor/`, no
+`js/node_modules`) on the [GitHub releases
+page](https://github.com/Lcoy2004/Flarum-Waterfall/releases), for hosts where
+Composer cannot be run.
 
 ### Developing locally
 
@@ -352,11 +366,12 @@ MIT — see [LICENSE](LICENSE).
 
 # 中文
 
-- **包名:** `lcoy/waterfall`
+- **包名:** [`lcoy/waterfall`](https://packagist.org/packages/lcoy/waterfall)
 - **扩展 ID:** `lcoy-waterfall`
 - **命名空间:** `Lcoy\Waterfall`
 - **前台路由:** `/waterfall`
-- **源码:** <https://gitee.com/lcoy/Flarum-Waterfall>
+- **源码:** <https://gitee.com/lcoy/Flarum-Waterfall>(镜像到
+  <https://github.com/Lcoy2004/Flarum-Waterfall>,Packagist 跟踪的是后者)
 
 ## 功能概述
 
@@ -401,11 +416,8 @@ MIT — see [LICENSE](LICENSE).
 
 ## 安装
 
-本包从 Gitee 分发,需先注册为 VCS 仓库:
-
 ```bash
-composer config repositories.waterfall vcs https://gitee.com/lcoy/Flarum-Waterfall.git
-composer require lcoy/waterfall:"*@dev"
+composer require lcoy/waterfall
 ```
 
 然后启用并执行迁移:
@@ -414,6 +426,20 @@ composer require lcoy/waterfall:"*@dev"
 php flarum extension:enable lcoy-waterfall
 php flarum migrate
 ```
+
+### 不走 Packagist 的安装方式
+
+若希望直接跟踪仓库(例如锁定到某个分支),可把它注册为 VCS 仓库:
+
+```bash
+composer config repositories.waterfall vcs https://gitee.com/lcoy/Flarum-Waterfall.git
+composer require lcoy/waterfall:"*@dev"
+```
+
+另外,每个标签发布时都会附带一个自包含 zip(不含 `vendor/`、不含
+`js/node_modules`),见 [GitHub releases
+页面](https://github.com/Lcoy2004/Flarum-Waterfall/releases),适用于无法运行
+Composer 的主机。
 
 ### 本地开发
 
