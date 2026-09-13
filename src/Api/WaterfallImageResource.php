@@ -63,7 +63,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
     /**
      * Everyone (including guests) sees published images; pending and failed
      * images remain visible to their owner only. The rule itself lives in the
-     * VisibleToActor trait (scopeVisibleTo), shared with the searcher so the
+     * HasPublishStatus trait (scopeVisibleTo), shared with the searcher so the
      * list endpoint and the resource can never disagree.
      */
     public function scope(Builder $query, Context $context): void

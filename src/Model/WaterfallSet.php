@@ -15,7 +15,7 @@ use Flarum\Database\AbstractModel;
 use Flarum\User\User;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Lcoy\Waterfall\Model\Concerns\VisibleToActor;
+use Lcoy\Waterfall\Model\Concerns\HasPublishStatus;
 
 /**
  * An image set: one upload (one or more files chosen together) becomes one
@@ -25,11 +25,7 @@ use Lcoy\Waterfall\Model\Concerns\VisibleToActor;
  */
 class WaterfallSet extends AbstractModel
 {
-    use VisibleToActor;
-
-    public const STATUS_PENDING = 'pending';
-    public const STATUS_PUBLISHED = 'published';
-    public const STATUS_FAILED = 'failed';
+    use HasPublishStatus;
 
     protected $table = 'waterfall_sets';
 

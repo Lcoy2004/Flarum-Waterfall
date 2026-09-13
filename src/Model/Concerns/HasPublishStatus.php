@@ -15,26 +15,30 @@ use Flarum\User\User;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
- * Row visibility: published for everyone, plus the actor's own pending and
- * failed rows.
+ * A row that moves through the upload lifecycle — pending, published, failed —
+ * along with the visibility rule that follows from those states.
  *
- * Every API resource and searcher reaches this scope, so the list endpoints and
- * the serialized resources can never disagree about what a given actor may see.
- * It lives here, in one place, because it is a security rule: the image and set
- * tables carry the same status semantics, and a copy of this that drifted in
- * one model would silently widen what that endpoint exposes.
+ * The constants and the scope belong together: the scope is defined entirely in
+ * terms of them, and these are the only rows the feed and the API expose.
  *
- * The using model must define STATUS_PUBLISHED, STATUS_PENDING and
- * STATUS_FAILED.
+ * The rule itself: published rows are public, including to guests, while a row
+ * still pending or failed is visible to its owner alone. Every API resource and
+ * searcher reaches this scope, so the list endpoints and the serialized
+ * resources can never disagree about what a given actor may see. It lives in
+ * one place because it is a security rule — a copy that drifted in one model
+ * would silently widen what that endpoint exposed.
  */
-trait VisibleToActor
+trait HasPublishStatus
 {
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_PUBLISHED = 'published';
+    public const STATUS_FAILED = 'failed';
+
     public function scopeVisibleTo(Builder $query, User $actor): void
     {
         // The table is read off the query's own model rather than $this: the
         // scope also runs against a relation's builder, and this keeps the
-        // qualification correct (and resolvable) without depending on the
-        // trait's host.
+        // qualification correct without depending on the trait's host.
         $model = $query->getModel();
         $status = $model->qualifyColumn('status');
         $userId = $model->qualifyColumn('user_id');
