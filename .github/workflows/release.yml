@@ -1,0 +1,70 @@
+# Release pipeline.
+#
+# A tag push is the only trigger: tagging is the deliberate act that publishes
+# a version. The Gitee mirror forwards tags to GitHub, so tagging on Gitee is
+# enough — no separate step here.
+#
+# What a release contains: the frontend bundles are rebuilt from the tagged
+# source (so the artifact can never ship a stale dist/mismatched build), and
+# the archive is built from an explicit file list rather than the whole
+# checkout, so dev-only paths (js/src, js/node_modules, tests, .github) stay
+# out of what users download.
+name: Release
+
+on:
+  push:
+    # Every tag. Narrow to 'v*' if you also push tags that are not releases.
+    tags:
+      - '*'
+
+# gh release create needs to write the release; nothing else is required.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # --no-frozen-lockfile because the repository does not carry a
+      # js/yarn.lock. Committing one (and then dropping this flag) would make
+      # releases byte-reproducible; until then the ranges in js/package.json
+      # are resolved fresh on every run.
+      - name: Build the frontend bundles
+        working-directory: js
+        run: |
+          yarn install --no-frozen-lockfile --network-timeout 600000
+          yarn build
+
+      # Explicit list: this is the set of files the extension needs at runtime
+      # (js/dist, not js/src). composer.lock is intentionally left out —
+      # Composer ignores a dependency's lock file.
+      - name: Package the extension
+        run: |
+          zip -r "waterfall-${GITHUB_REF_NAME}.zip" \
+            src \
+            js/dist \
+            less \
+            locale \
+            migrations \
+            extend.php \
+            composer.json \
+            README.md \
+            LICENSE
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "waterfall-${GITHUB_REF_NAME}.zip"
