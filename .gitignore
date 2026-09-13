@@ -1,0 +1,18 @@
+# Composer dependencies are installed by the site that requires this
+# extension, never shipped with it.
+/vendor/
+
+# Frontend build dependencies. The compiled bundle under js/dist IS committed:
+# extend.php loads it directly, so the extension must work without a build step.
+/js/node_modules/
+
+# Local artifacts that are not part of the package.
+/wf_test_upload.png
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*~

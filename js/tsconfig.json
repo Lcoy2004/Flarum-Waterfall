@@ -1,0 +1,21 @@
+{
+  // Use Flarum's tsconfig as a starting point.
+  "extends": "flarum-tsconfig",
+  // This will match all .ts, .tsx, .d.ts, .js, .jsx files in your `src`
+  // folder and also tells your TypeScript server to read core's global
+  // typings for access to `dayjs` and `$` in the global namespace.
+  "include": ["src/**/*", "tests/**/*", "../../../flarum/core/js/dist-typings/@types/**/*", "@types/**/*"],
+  "compilerOptions": {
+    // This will output typings to `dist-typings`.
+    "declarationDir": "./dist-typings",
+    // The webpack build is transpile-only, so nothing else would fail on an
+    // unused import or a leftover parameter. These two keep the editor (and a
+    // manual `tsc --noEmit`) honest instead.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "paths": {
+      "flarum/*": ["../../../flarum/core/js/dist-typings/*"]
+    },
+    "baseUrl": "."
+  }
+}

@@ -1,0 +1,74 @@
+{
+    "name": "lcoy/waterfall",
+    "description": "A Pixiv-style image waterfall (masonry) sharing page for Flarum, with external image host uploads, async queue processing, likes and a recommendation feed.",
+    "type": "flarum-extension",
+    "keywords": [
+        "images",
+        "gallery",
+        "waterfall",
+        "masonry"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Lcoy",
+            "email": "lcoy@863454.xyz"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/lcoy/waterfall/issues",
+        "source": "https://github.com/lcoy/waterfall"
+    },
+    "require": {
+        "flarum/core": "^2.0.0"
+    },
+    "require-dev": {
+        "flarum/testing": "^2.0.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Lcoy\\Waterfall\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Lcoy\\Waterfall\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "flarum-extension": {
+            "title": "Waterfall",
+            "category": "feature",
+            "icon": {
+                "name": "fas fa-images",
+                "backgroundColor": "#6f42c1",
+                "color": "#fff"
+            }
+        },
+        "flarum-cli": {
+            "modules": {
+                "admin": true,
+                "forum": true,
+                "js": true,
+                "jsCommon": true,
+                "css": true,
+                "typescript": true,
+                "backendTesting": true
+            }
+        }
+    },
+    "scripts": {
+        "test": [
+            "@test:integration"
+        ],
+        "test:integration": "phpunit -c tests/phpunit.integration.xml",
+        "test:setup": "@php tests/integration/setup.php"
+    },
+    "scripts-descriptions": {
+        "test": "Runs all tests.",
+        "test:integration": "Runs integration tests.",
+        "test:setup": "Sets up a database for use with integration tests. Execute this only once."
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}

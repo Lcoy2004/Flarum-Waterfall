@@ -1,0 +1,119 @@
+//
+// Admin frontend styles for the Waterfall extension.
+// ---------------------------------------------------------------------------
+
+.WaterfallSettings-heading {
+  margin: 24px 0 4px;
+  padding-bottom: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--control-bg);
+}
+
+.WaterfallConfigTest {
+  margin: 8px 0 16px;
+
+  &-result {
+    margin-top: 8px;
+    padding: 8px 12px;
+    border-radius: var(--border-radius);
+    font-size: 13px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+
+    &--ok {
+      color: var(--success-color, #4caf50);
+      background: rgba(76, 175, 80, 0.12);
+    }
+
+    &--err {
+      color: var(--control-danger-color, #d66);
+      background: var(--control-danger-bg, #fdd);
+    }
+  }
+}
+
+// -- Upload log panel ---------------------------------------------------------
+
+.WaterfallUploadLogPanel {
+  margin-top: 24px;
+
+  &-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    h4 {
+      margin: 0;
+    }
+  }
+
+  &-empty {
+    color: var(--muted-color);
+  }
+
+  &-tableWrapper {
+    margin-top: 10px;
+    overflow-x: auto;
+    border: 1px solid var(--control-bg);
+    border-radius: var(--border-radius);
+  }
+
+  &-table {
+    width: 100%;
+    margin: 0;
+    font-size: 13px;
+    border-collapse: collapse;
+
+    th,
+    td {
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    th {
+      background: var(--control-bg);
+      font-weight: 600;
+    }
+
+    tbody tr + tr {
+      border-top: 1px solid var(--control-bg);
+    }
+  }
+
+  &-error {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-width: 320px;
+    color: var(--control-danger-color, #d66);
+  }
+
+  &-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+
+    &.badge-success {
+      color: var(--success-color, #4caf50);
+      background: rgba(76, 175, 80, 0.12);
+    }
+
+    &.badge-failed {
+      color: var(--control-danger-color, #d66);
+      background: var(--control-danger-bg, #fdd);
+    }
+
+    &.badge-pending {
+      color: var(--muted-color);
+      background: var(--control-bg);
+    }
+
+    &.badge-deferred {
+      color: #b8860b;
+      background: rgba(184, 134, 11, 0.12);
+    }
+  }
+}

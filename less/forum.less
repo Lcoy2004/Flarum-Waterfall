@@ -1,0 +1,1182 @@
+//
+// Forum frontend styles for the Waterfall extension.
+//
+// Uses Flarum design tokens (CSS custom properties) so both the light and
+// dark themes render correctly without any !important overrides.
+// ---------------------------------------------------------------------------
+
+// Fluid metrics shared by the feed cards.
+//
+// They are `cqi` clamps — a percentage of the card's *own* width — so the card
+// stays in proportion at any column count, with the clamps keeping type and
+// tap targets usable at the extremes.
+//
+// The `~"..."` escapes are required, not cosmetic: LESS evaluates CSS math at
+// compile time, and it gets these two expressions wrong. `min(280px, 45%)`
+// collapses to `45%`, discarding the px floor, and `1.2cqi + 4px` is folded
+// into `5.2cqi` by adding the numbers and keeping the first unit. Escaping
+// hands the whole expression to the browser untouched.
+@wf-inset: ~"clamp(6px, 1.2cqi + 4px, 8px)"; // overlay insets, chip padding, gaps
+@wf-small: ~"clamp(11px, 0.3cqi + 10px, 12px)"; // meta text: badges, footer, stats
+
+// -- Page -------------------------------------------------------------------
+
+.WaterfallPage {
+  &-hero {
+    display: flex;
+    align-items: flex-end;
+    // Wraps on its own instead of switching layout at a breakpoint: while the
+    // text and the button fit side by side they share a row, and the button
+    // drops onto its own row when they no longer do.
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 12px 0 4px;
+  }
+
+  &-heroText {
+    // Grows into the space the button leaves behind; the intrinsic basis is
+    // what makes the wrap happen at the right width without a media query.
+    flex: 1 1 260px;
+    min-width: 0;
+  }
+
+  &-title {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 700;
+  }
+
+  &-tabs {
+    display: inline-flex;
+    margin-top: 10px;
+    border: 1px solid var(--control-bg);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+  }
+
+  &-tab {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted-color);
+    padding: 8px 18px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
+
+    &:hover {
+      color: var(--text-color);
+      background: var(--control-bg);
+    }
+
+    &.active {
+      color: var(--button-primary-color, #fff);
+      background: var(--link-color);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--link-color);
+      outline-offset: -2px;
+    }
+  }
+
+  &-uploadButton {
+    // Floating action button (top-right of the page header). `margin-left:
+    // auto` keeps it right-aligned both beside the text and on its own row
+    // after the hero wraps.
+    margin-left: auto;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    white-space: nowrap;
+  }
+
+  &-content {
+    position: relative;
+  }
+}
+
+// -- Grid -------------------------------------------------------------------
+
+.WaterfallGrid {
+  position: relative;
+  margin-top: 16px;
+
+  &-grid {
+    display: grid;
+    // Fully fluid column sizing — no breakpoint and no fixed column count.
+    //
+    // The track floor is the *smaller* of a comfortable card width and 45% of
+    // the grid itself, so the layout answers to the space it actually has:
+    // on a phone the 45% wins and exactly two columns fit (the Xiaohongshu
+    // feed), while a wide container lets the card floor win and the browser
+    // fits as many comfortable columns as will go. Nothing here knows about
+    // phone, tablet or desktop.
+    grid-template-columns: repeat(auto-fill, minmax(~"min(var(--waterfall-card-min, 280px), 45%)", 1fr));
+    // The gutter comes from the admin setting (--waterfall-gutter, set inline
+    // by WaterfallGrid) and is deliberately not overridden per breakpoint.
+    gap: var(--waterfall-gutter, 12px);
+  }
+
+  &-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 80px 20px;
+    text-align: center;
+    color: var(--muted-color);
+  }
+
+  &-emptyArt {
+    font-size: 42px;
+    color: var(--control-color);
+
+    i + i {
+      margin-left: 10px;
+      opacity: 0.6;
+    }
+  }
+
+  // Both the infinite-scroll sentinel and the "end of feed" marker sit in
+  // normal flow below the grid, so they can never overlap the last row.
+  &-sentinel,
+  &-end {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 56px;
+    padding: 12px 0;
+    color: var(--muted-color);
+    font-size: 13px;
+  }
+}
+
+// -- Card -------------------------------------------------------------------
+
+.WaterfallCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--control-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  // The card is its own size context: its chrome is tuned by how wide the
+  // card actually is (see the @container query below), not by the viewport.
+  // That stays correct when the column count changes at a fixed viewport —
+  // e.g. a phone held in landscape, or a desktop window where an extra
+  // column fits — which a media query could never track.
+  container-type: inline-size;
+  // Pixiv-inspired hover: slight lift + deeper shadow (150ms).
+  transition: transform 150ms ease, box-shadow 150ms ease;
+
+  &:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+  }
+
+  &-figure {
+    position: relative;
+    display: block;
+    width: 100%;
+    // Portrait cover (Xiaohongshu-style): a taller 3:4 frame reads as a
+    // photo feed rather than a thumbnail wall.
+    aspect-ratio: 3 / 4;
+    padding: 0;
+    border: 0;
+    background: var(--control-bg);
+    cursor: pointer;
+    overflow: hidden;
+
+    &:focus-visible {
+      outline: 2px solid var(--link-color);
+      outline-offset: -2px;
+    }
+
+    &:disabled {
+      cursor: default;
+    }
+  }
+
+  &-skeleton {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    // Breathing grey gradient placeholder.
+    background: linear-gradient(100deg, var(--control-bg) 30%, var(--muted-more-color, #999) 50%, var(--control-bg) 70%);
+    background-size: 200% 100%;
+    animation: waterfall-skeleton 1.4s ease-in-out infinite;
+  }
+
+  &-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 480ms ease;
+
+    &--loaded {
+      opacity: 1;
+    }
+  }
+
+  // Slideshow: the frames around the visible one are stacked in the same box
+  // (the component mounts previous/current/next only). The active frame is
+  // lifted on top and fades in over the previous one — both layers are opaque,
+  // so the crossfade never reveals the skeleton beneath. The fade is an
+  // animation rather than a transition on purpose: the class moves to a
+  // different element on every tick, and that is what restarts the keyframes.
+  &-img--active {
+    z-index: 1;
+    animation: waterfall-slide-in 480ms ease, waterfall-kenburns 4.2s ease-out forwards;
+  }
+
+  // Slide position indicator: a row of quiet dots at the bottom-right of the
+  // frame, mirroring the count badge on the left. The active dot stretches
+  // into a pill so the direction of travel stays legible at a glance.
+  &-dots {
+    position: absolute;
+    // Above the active slide (z-index 1).
+    z-index: 2;
+    // Matches the count badge's inset so both sit on the same line at any
+    // card width.
+    right: @wf-inset;
+    bottom: @wf-inset;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(3px);
+    pointer-events: none;
+  }
+
+  &-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.55);
+    transition: width 240ms ease, background-color 240ms ease;
+
+    &--active {
+      width: 14px;
+      background: rgba(255, 255, 255, 0.95);
+    }
+  }
+
+  &-badge {
+    position: absolute;
+    // Above the active slide (z-index 1).
+    z-index: 2;
+    top: @wf-inset;
+    left: @wf-inset;
+    padding: 2px @wf-inset;
+    border-radius: 999px;
+    font-size: @wf-small;
+    color: #fff;
+
+    &--pending {
+      background: rgba(0, 0, 0, 0.55);
+    }
+
+    &--failed {
+      background: #d63838;
+    }
+  }
+
+  // Aggregated image count for the set, pinned to the bottom-left of the
+  // cover so it never collides with the status badge (top-left).
+  &-count {
+    position: absolute;
+    // Above the active slide (z-index 1).
+    z-index: 2;
+    left: @wf-inset;
+    bottom: @wf-inset;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px @wf-inset;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: @wf-small;
+    line-height: 1.6;
+  }
+
+  // Floating action cluster over the top-right corner of the image. It is kept
+  // out of the way on hover-capable devices so taps land on the photo, but is
+  // always visible on touch screens where hover does not exist.
+  &-actions {
+    position: absolute;
+    top: @wf-inset;
+    right: @wf-inset;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    opacity: 0;
+    // Disabled while hidden so an invisible button can never swallow a tap.
+    pointer-events: none;
+    transition: opacity 150ms ease;
+
+    @media (hover: none) {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
+  &:hover &-actions,
+  &:focus-within &-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  &-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    // Generous, well-separated touch targets prevent accidental taps. The
+    // floor matters more than the scaling here: a control must not shrink
+    // below a comfortable tap size just because its card got narrower.
+    width: ~"clamp(34px, 1.2cqi + 32px, 36px)";
+    height: ~"clamp(34px, 1.2cqi + 32px, 36px)";
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    // Semi-transparent scrim keeps icons legible on any photo.
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: ~"clamp(13px, 0.3cqi + 12px, 14px)";
+    line-height: 1;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 150ms ease, transform 150ms ease, opacity 150ms ease;
+
+    &:hover {
+      background: rgba(0, 0, 0, 0.75);
+      transform: scale(1.06);
+    }
+
+    &:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: default;
+      transform: none;
+    }
+
+    // The card only carries the delete action; liking lives in the lightbox
+    // (see .WaterfallLightbox-action--like), so there is no `--like` modifier
+    // to style here.
+    &--delete:hover {
+      background: var(--control-danger-color, #d66);
+    }
+  }
+
+  &-info {
+    display: flex;
+    flex-direction: column;
+    // Every size inside the card is a clamp over `cqi` (1% of the card's own
+    // width — the card is a container, see above). The card therefore stays in
+    // proportion whether the grid gives it 170px or 400px, and the clamps only
+    // exist to keep type readable at the extremes; there is no breakpoint and
+    // no per-device value anywhere.
+    gap: clamp(4px, 1.6cqi, 6px);
+    padding: ~"clamp(7px, 1.2cqi + 6px, 10px)";
+  }
+
+  &-titleRow {
+    display: flex;
+    // Top-aligned so the rename affordance sits on the title's first line
+    // rather than floating between two lines of text.
+    align-items: flex-start;
+    gap: 6px;
+    min-height: 2.8em;
+
+    &--editing {
+      align-items: center;
+      gap: 0;
+      min-height: 0;
+    }
+  }
+
+  &-title {
+    flex: 1;
+    min-width: 0;
+    font-size: ~"clamp(12.5px, 0.6cqi + 11.5px, 13.5px)";
+    font-weight: 600;
+    line-height: 1.4;
+    // Two lines, then ellipsis (Xiaohongshu-style): a two-line box is enough
+    // for most titles while keeping every card in a row the same height.
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    min-height: 2.8em;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  &-titlePlaceholder {
+    color: var(--muted-color);
+    font-weight: 400;
+    font-style: italic;
+  }
+
+  // Rename affordance: only revealed on hover/focus for a tidy card, but
+  // always visible on touch devices where hover does not exist. Nudged down
+  // to centre on the title's first line (the title row is top-aligned now
+  // that titles may wrap to two lines).
+  &-rename {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin-top: -3px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted-color);
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 150ms ease, background-color 150ms ease, color 150ms ease;
+
+    &:hover {
+      background: var(--control-bg);
+      color: var(--link-color);
+    }
+
+    &:focus-visible {
+      opacity: 1;
+      outline: 2px solid var(--link-color);
+      outline-offset: 1px;
+    }
+  }
+
+  &:hover &-rename,
+  &:focus-within &-rename {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    &-rename {
+      opacity: 1;
+    }
+  }
+
+  &-titleSaving {
+    flex-shrink: 0;
+    color: var(--muted-color);
+    font-size: 12px;
+  }
+
+  &-titleInput {
+    width: 100%;
+    height: auto;
+    padding: 4px 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  // Freeform tag chips below the title: quiet, rounded pills that pick up the
+  // link color on card hover so they reward attention without shouting.
+  &-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: ~"clamp(3px, 0.8cqi + 1px, 4px)";
+    margin-top: -2px;
+  }
+
+  &-tag {
+    max-width: 100%;
+    padding: 1px @wf-inset;
+    border-radius: 999px;
+    // The card itself is control-bg, so the chip needs a tinted fill to be
+    // legible in both light and dark themes without a hard border.
+    background: color-mix(in srgb, var(--control-color) 14%, transparent);
+    color: var(--muted-color);
+    font-size: ~"clamp(10px, 0.35cqi + 9.4px, 11px)";
+    line-height: 1.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 150ms ease;
+  }
+
+  &:hover &-tag {
+    color: var(--link-color);
+  }
+
+  &-user {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted-color);
+    font-size: 12px;
+    text-decoration: none;
+    min-width: 0;
+
+    &:hover {
+      color: var(--link-color);
+    }
+
+    // Flarum sizes .Avatar through --size (its own default is 48px, far too
+    // large for a feed card footer). `flex-shrink: 0` keeps the avatar round
+    // when a long username competes for the row.
+    .Avatar {
+      --size: ~"clamp(17px, 1.8cqi + 14px, 20px)";
+      flex-shrink: 0;
+    }
+  }
+
+  &-username {
+    font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &-footer {
+    display: flex;
+    align-items: center;
+    gap: @wf-inset;
+    min-height: 22px;
+    color: var(--muted-color);
+    font-size: @wf-small;
+  }
+
+  &-stats {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  &-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  &-error {
+    font-size: 12px;
+    color: var(--control-danger-color, #d66);
+    overflow-wrap: anywhere;
+  }
+}
+
+@keyframes waterfall-skeleton {
+  0% {
+    background-position: 120% 0;
+  }
+  100% {
+    background-position: -80% 0;
+  }
+}
+
+// Slow drift-zoom for the active slideshow slide. Runs just past the 3s
+// rotation interval so a slide is always still moving when it fades out.
+@keyframes waterfall-kenburns {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.06);
+  }
+}
+
+// The incoming slide fading in over the outgoing one, which stays opaque
+// underneath for the whole transition.
+@keyframes waterfall-slide-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+// -- Lightbox ---------------------------------------------------------------
+
+.WaterfallLightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1050; // Above the Flarum modal backdrop.
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: waterfall-fade-in 180ms ease;
+
+  &:focus {
+    outline: none;
+  }
+
+  &-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.88);
+  }
+
+  &-stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    touch-action: none;
+    cursor: grab;
+
+    &:active {
+      cursor: grabbing;
+    }
+  }
+
+  &-img {
+    max-width: 92vw;
+    max-height: 86vh;
+    object-fit: contain;
+    user-select: none;
+    transition: transform 80ms ease-out;
+    animation: waterfall-zoom-in 200ms ease;
+  }
+
+  &-toolbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 16px;
+    color: #fff;
+    background: linear-gradient(rgba(0, 0, 0, 0.6), transparent);
+  }
+
+  &-toolbarMain {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  &-title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &-counter {
+    font-size: 13px;
+    opacity: 0.75;
+    white-space: nowrap;
+  }
+
+  &-toolbarActions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+
+    .Button {
+      color: #fff;
+    }
+  }
+
+  &-user {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #fff;
+    text-decoration: none;
+
+    &:hover {
+      color: #fff;
+      text-decoration: underline;
+    }
+
+    .Avatar {
+      --size: 24px;
+      flex-shrink: 0;
+    }
+  }
+
+  &-time {
+    opacity: 0.75;
+  }
+
+  &-views,
+  &-likes {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    opacity: 0.9;
+  }
+
+  // Overlapping liker avatars, moved here from the card so the grid stays tidy.
+  &-likers {
+    display: inline-flex;
+    align-items: center;
+
+    // Sized via Flarum's own --size variable; the ring is drawn with a border
+    // so overlapping avatars stay visually separated.
+    .Avatar {
+      --size: 22px;
+      border: 2px solid rgba(255, 255, 255, 0.85);
+      border-radius: 50%;
+      transition: transform 150ms ease;
+    }
+  }
+
+  &-likerLink {
+    display: inline-flex;
+    margin-left: -8px;
+
+    &:first-child {
+      margin-left: 0;
+    }
+
+    &:hover .Avatar {
+      transform: translateY(-2px);
+    }
+
+    &:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 2px;
+      border-radius: 50%;
+    }
+  }
+
+  &-action {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 50%;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    &--like.is-active {
+      color: #ff5a76;
+    }
+
+    &--delete:hover {
+      color: #ff8a8a;
+    }
+  }
+
+  // Placeholder shown instead of the <img> when the image never made it to
+  // the host (failed transfer): the reason, or a generic line when the
+  // server withheld it (non-owner viewing a failed image cannot happen —
+  // those sets are owner-only — but a sparse payload can).
+  &-failed {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    max-width: ~"min(420px, 80vw)";
+    padding: 24px;
+    color: rgba(255, 255, 255, 0.85);
+    text-align: center;
+
+    i {
+      font-size: 44px;
+      opacity: 0.5;
+    }
+
+    p {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+  }
+
+  &-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #fff;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    &--prev {
+      left: 16px;
+    }
+
+    &--next {
+      right: 16px;
+    }
+  }
+
+  &-hint {
+    position: absolute;
+    bottom: 14px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+    pointer-events: none;
+  }
+}
+
+@keyframes waterfall-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes waterfall-zoom-in {
+  from {
+    transform: scale(0.96);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+// -- Upload modal -----------------------------------------------------------
+
+.WaterfallUploadModal {
+  &-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  &-description {
+    margin: 0;
+    color: var(--muted-color);
+  }
+
+  &-setTitle {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &-setTitleLabel {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  &-setTitleHint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted-color);
+  }
+
+  // Tag chips input: an inline field that reads as a cluster of pills with a
+  // ghostly text input growing after the last chip.
+  &-tags {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &-tagsField {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    min-height: 38px;
+    padding: 5px 8px;
+    border: 1px solid var(--control-bg);
+    border-radius: var(--border-radius);
+    background: var(--body-bg);
+    cursor: text;
+    transition: border-color 150ms ease;
+
+    &:focus-within {
+      border-color: var(--link-color);
+    }
+  }
+
+  &-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 100%;
+    padding: 2px 4px 2px 10px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--control-color) 14%, transparent);
+    color: var(--text-color);
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  &-tagRemove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted-color);
+    font-size: 10px;
+    cursor: pointer;
+    transition: background-color 150ms ease, color 150ms ease;
+
+    &:hover {
+      background: color-mix(in srgb, var(--control-danger-color, #d66) 18%, transparent);
+      color: var(--control-danger-color, #d66);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--link-color);
+      outline-offset: 1px;
+    }
+  }
+
+  &-tagInput {
+    flex: 1;
+    min-width: 120px;
+    height: 26px;
+    padding: 0 2px;
+    border: 0;
+    background: transparent;
+    color: var(--text-color);
+    font-size: 13px;
+    outline: none;
+
+    &::placeholder {
+      color: var(--muted-more-color, #999);
+    }
+  }
+
+  &-dropzone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 28px 16px;
+    border: 2px dashed var(--control-bg);
+    border-radius: var(--border-radius);
+    text-align: center;
+    color: var(--muted-color);
+    transition: border-color 150ms ease, background-color 150ms ease;
+
+    > i {
+      font-size: 28px;
+    }
+
+    p {
+      margin: 0;
+    }
+
+    &--dragging {
+      border-color: var(--link-color);
+      background: var(--control-bg);
+    }
+  }
+
+  &-fileInput {
+    display: none;
+  }
+
+  &-queue {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  &-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius);
+    background: var(--control-bg);
+
+    &--error {
+      background: var(--control-danger-bg, #fdd);
+    }
+
+    // HTML5 drag-and-drop reordering of the upload queue.
+    &--dragging {
+      opacity: 0.5;
+    }
+
+    &--over {
+      box-shadow: inset 0 0 0 2px var(--link-color);
+    }
+  }
+
+  &-itemHandle {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    color: var(--muted-color);
+    font-size: 14px;
+    cursor: grab;
+    touch-action: none;
+
+    &:active {
+      cursor: grabbing;
+    }
+  }
+
+  &-itemIcon {
+    flex-shrink: 0;
+    width: 20px;
+    color: var(--muted-color);
+    font-size: 18px;
+    text-align: center;
+  }
+
+  &-itemBody {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &-itemName {
+    font-size: 13px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &-itemMeta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 16px;
+    font-size: 12px;
+    color: var(--muted-color);
+
+    .fa-check {
+      color: var(--success-color, #4caf50);
+    }
+  }
+
+  &-itemError {
+    color: var(--control-danger-color, #d66);
+  }
+
+  &-itemActions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 4px;
+  }
+
+  &-progress {
+    margin-top: 6px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--muted-more-color, #ccc);
+    overflow: hidden;
+
+    &--overall {
+      margin-top: 0;
+      flex: 1;
+    }
+  }
+
+  &-progressBar {
+    height: 100%;
+    border-radius: 2px;
+    background: var(--link-color);
+    transition: width 200ms ease;
+  }
+
+  &-overall {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  &-overallLabel {
+    font-size: 13px;
+    color: var(--muted-color);
+    white-space: nowrap;
+  }
+
+  &-notice {
+    padding: 10px 12px;
+    border-radius: var(--border-radius);
+    font-size: 13px;
+    background: var(--control-bg);
+
+    &--error {
+      background: var(--control-danger-bg, #fdd);
+      color: var(--control-danger-color, #d66);
+    }
+  }
+
+  &-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+}
+
+// -- Responsive tweaks --------------------------------------------------------
+
+// The feed grid, the page hero and every card size themselves from the space
+// they are given (fluid grid tracks, wrapping flex, and `cqi` clamps on the
+// card), so nothing here needs to know about screen sizes. What remains is a
+// genuine content decision: on a narrow screen the lightbox toolbar keeps only
+// what fits, dropping the secondary metadata rather than wrapping it.
+@media (max-width: 767px) {
+  .WaterfallLightbox-toolbarActions {
+    .WaterfallLightbox-time,
+    .WaterfallLightbox-likers,
+    .WaterfallLightbox-views {
+      display: none;
+    }
+  }
+}
+
+// Respect reduced-motion preferences.
+@media (prefers-reduced-motion: reduce) {
+  .WaterfallCard,
+  .WaterfallCard-img,
+  .WaterfallCard-action,
+  .WaterfallLightbox-likerLink .Avatar,
+  .WaterfallLightbox-img {
+    transition: none;
+  }
+
+  .WaterfallCard-skeleton,
+  .WaterfallCard-img--active,
+  .WaterfallCard-dot {
+    animation: none;
+    transition: none;
+  }
+}
