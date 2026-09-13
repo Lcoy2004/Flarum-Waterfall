@@ -121,7 +121,7 @@ lcoy-waterfall:
       decay_lambda_label: "时间衰减系数 λ"
       recommend_help: "score = w1 × log10(1 + 点赞数) + w2 × log10(1 + 浏览数) + w3 × exp(-λ × 小时龄)"
       display_heading: "前端展示"
-      per_page_label: "瀑布流默认每页条数"
+      per_page_label: "瀑布流每页显示集数"
       card_radius_label: "瀑布流卡片圆角像素"
       card_gutter_label: "列间距像素"
       show_like_button_label: "是否显示点赞按钮"

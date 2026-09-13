@@ -121,7 +121,7 @@ lcoy-waterfall:
       decay_lambda_label: "Time decay coefficient λ"
       recommend_help: "score = w1 × log10(1 + likes) + w2 × log10(1 + views) + w3 × exp(-λ × age in hours)"
       display_heading: "Frontend display"
-      per_page_label: "Images per page"
+      per_page_label: "Sets per page"
       card_radius_label: "Card corner radius (px)"
       card_gutter_label: "Card gutter (px)"
       show_like_button_label: "Show like button"
