@@ -34,6 +34,26 @@ jobs:
         with:
           node-version: '20'
 
+      # The tag is the single source of truth for the version; js/package.json
+      # carries the same number so the repository does not advertise two of
+      # them. This check is what keeps the two in step: forgetting to bump the
+      # file fails the release right here — before any dependency install or
+      # build work is spent, and before a release is published — instead of
+      # leaving the mismatch to be noticed by whoever next reads the file.
+      #
+      # It is also why the version is bumped as part of preparing a tag rather
+      # than after: the tag has to be pushed to run this at all.
+      - name: Check the package version against the tag
+        run: |
+          VERSION=$(node -p "require('./js/package.json').version")
+
+          if [ "$VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::js/package.json declares version $VERSION but the tag is ${GITHUB_REF_NAME}. Bump js/package.json to ${GITHUB_REF_NAME} before tagging."
+            exit 1
+          fi
+
+          echo "js/package.json matches the tag (${GITHUB_REF_NAME})."
+
       # --no-frozen-lockfile because the repository does not carry a
       # js/yarn.lock. Committing one (and then dropping this flag) would make
       # releases byte-reproducible; until then the ranges in js/package.json
