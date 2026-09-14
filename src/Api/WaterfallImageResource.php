@@ -219,8 +219,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
                         );
 
                         if ($counted) {
-                            $image->increment('views_count');
-                            $this->incrementSetViews($image);
+                            $this->recordView($image);
 
                             // Coalesce score recalculation: without this, a
                             // popular image viewed by many distinct IPs would
@@ -363,22 +362,43 @@ class WaterfallImageResource extends AbstractDatabaseResource
     }
 
     /**
-     * Add one to the owning set's view counter.
+     * Apply one counted view to the image and, when it belongs to a set, to
+     * the set's denormalised counter — as a single transaction holding the
+     * set's row lock.
      *
-     * Only the view path calls this. Like/unlike always enqueue a score
-     * recalculation that rewrites the set's counters from the images, so a
-     * delta there would just be a second write to the same row; views are
-     * coalesced to one recalculation per image per minute, so without the
-     * delta the set's total would trail every view in between — and stay
-     * behind once the viewing stops.
+     * The lock is what keeps the two counters consistent:
+     * WaterfallSet::syncAggregates() rewrites the set's counters from the
+     * images under the same lock, so either that sync sees this view already
+     * applied to the image (its sum then includes it) or it runs entirely
+     * before this transaction (and this delta lands on top). Without the lock
+     * a sync that read the images a moment earlier could overwrite the set's
+     * +1 with the older sum.
+     *
+     * Views delta the set directly (unlike likes, whose score recalculation
+     * rewrites the counters anyway) because the recalculation is coalesced to
+     * one job per image per minute: without the delta the set's total would
+     * trail every view in between, and stay behind once the viewing stops.
      */
-    protected function incrementSetViews(WaterfallImage $image): void
+    protected function recordView(WaterfallImage $image): void
     {
         if (! $image->set_id) {
+            $image->increment('views_count');
+
             return;
         }
 
-        WaterfallSet::query()->whereKey($image->set_id)->increment('views_count');
+        $image->newQuery()->getConnection()->transaction(function () use ($image) {
+            if (WaterfallSet::query()->lockForUpdate()->find($image->set_id) === null) {
+                // The set vanished (its last image was deleted); count the
+                // image on its own.
+                $image->increment('views_count');
+
+                return;
+            }
+
+            $image->increment('views_count');
+            WaterfallSet::query()->whereKey($image->set_id)->increment('views_count');
+        });
     }
 
     /**

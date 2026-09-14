@@ -24,6 +24,7 @@ use Lcoy\Waterfall\Model\WaterfallSet;
 use Lcoy\Waterfall\RateLimit\RateLimiter;
 use Lcoy\Waterfall\Upload\UploadValidator;
 use Psr\Http\Message\UploadedFileInterface;
+use Psr\Log\LoggerInterface;
 
 use function Tobyz\JsonApiServer\json_api_response;
 
@@ -114,7 +115,27 @@ class UploadImageEndpoint extends Endpoint
                 }
 
                 $stagedPath = $stagedDir.'/'.bin2hex(random_bytes(16)).'.'.$extension;
-                $file->moveTo($stagedPath);
+
+                // A failed stage (storage unwritable, disk full) must surface
+                // as a validation error the uploader can read — the thumbnail
+                // below already degrades gracefully, but without this the main
+                // file turned the whole request into a raw 500.
+                try {
+                    $file->moveTo($stagedPath);
+                } catch (\Throwable $e) {
+                    // Leave a trace for the operator: the translated error
+                    // tells the uploader what happened, but the reason (a
+                    // permission problem, a full disk) only shows up here —
+                    // staging runs before the queue job, so the upload log
+                    // never records this failure.
+                    resolve(LoggerInterface::class)->error('lcoy-waterfall: staging upload failed: {message}', [
+                        'message' => $e->getMessage(),
+                    ]);
+
+                    throw new ValidationException([
+                        'file' => $translator->trans('lcoy-waterfall.api.errors.staging_failed'),
+                    ]);
+                }
 
                 // Optional browser-encoded card thumbnail (same multipart
                 // request, `thumb` field). A card without one renders the

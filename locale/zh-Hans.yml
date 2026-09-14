@@ -6,6 +6,7 @@ lcoy-waterfall:
       file_too_large: "图片超过了允许的最大体积 {max} MB。"
       mime_not_allowed: "不允许此图片类型。"
       file_unreadable: "无法读取上传的文件。"
+      staging_failed: "上传文件无法在服务器上暂存,请检查服务器存储空间后重试。"
       hourly_limit: "您已达到每小时上传上限,请稍后再试。"
       concurrency_limit: "您还有图片正在处理中,请等待其完成。"
       title_too_long: "标题不能超过 200 个字符。"

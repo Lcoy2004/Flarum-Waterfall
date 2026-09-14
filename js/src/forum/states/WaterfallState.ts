@@ -42,6 +42,15 @@ export default class WaterfallState {
   protected pollFailures = 0;
   protected visibilityHandler: (() => void) | null = null;
 
+  /**
+   * Bumped by every load(). Responses carry the epoch they were started
+   * under and are discarded once a newer load has begun: switching the sort
+   * tab twice in quick succession must not let the first (slower) response
+   * overwrite the feed with the wrong sort's sets, nor append a page fetched
+   * under the previous sort.
+   */
+  protected loadEpoch = 0;
+
   /** Give up polling after this long to avoid hammering the API forever. */
   protected static readonly POLL_TIMEOUT = 300000;
 
@@ -85,6 +94,8 @@ export default class WaterfallState {
       }
     }
 
+    const epoch = ++this.loadEpoch;
+
     this.loading = true;
 
     app.store
@@ -93,13 +104,27 @@ export default class WaterfallState {
         this.requestParams({ page: { offset: 0, limit: this.perPage } })
       )
       .then((sets) => {
+        if (epoch !== this.loadEpoch) {
+          return;
+        }
+
         this.sets = sets;
         this.offset = sets.length;
         this.hasMore = sets.length >= this.perPage;
         this.initialLoaded = true;
       })
-      .catch((error: unknown) => this.showError(error, 'lcoy-waterfall.forum.grid.load_failed'))
+      .catch((error: unknown) => {
+        if (epoch === this.loadEpoch) {
+          this.showError(error, 'lcoy-waterfall.forum.grid.load_failed');
+        }
+      })
       .then(() => {
+        // The newest load owns the loading flag; a superseded one must not
+        // clear it while its replacement is still in flight.
+        if (epoch !== this.loadEpoch) {
+          return;
+        }
+
         this.loading = false;
         this.startPollingIfNeeded();
         m.redraw();
@@ -114,6 +139,8 @@ export default class WaterfallState {
       return;
     }
 
+    const epoch = this.loadEpoch;
+
     this.loadingMore = true;
 
     app.store
@@ -122,6 +149,10 @@ export default class WaterfallState {
         this.requestParams({ page: { offset: this.offset, limit: this.perPage } })
       )
       .then((sets) => {
+        if (epoch !== this.loadEpoch) {
+          return;
+        }
+
         // Merge, skipping sets already loaded (an upload may have shifted
         // offsets or appeared at the top).
         const existing = new Set(this.sets.map((set) => set.id()));
@@ -129,10 +160,20 @@ export default class WaterfallState {
         this.offset += sets.length;
         this.hasMore = sets.length >= this.perPage;
       })
-      .catch((error: unknown) => this.showError(error, 'lcoy-waterfall.forum.grid.load_failed'))
+      .catch((error: unknown) => {
+        if (epoch === this.loadEpoch) {
+          this.showError(error, 'lcoy-waterfall.forum.grid.load_failed');
+        }
+      })
       .then(() => {
+        // Unlike the data above, this flag is always released: only loadNext
+        // itself ever sets it, so a superseded run must not leave it stuck
+        // and freeze infinite scrolling.
         this.loadingMore = false;
-        m.redraw();
+
+        if (epoch === this.loadEpoch) {
+          m.redraw();
+        }
       });
   }
 

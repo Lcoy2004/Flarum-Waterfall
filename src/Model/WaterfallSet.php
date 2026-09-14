@@ -74,31 +74,43 @@ class WaterfallSet extends AbstractModel
      */
     public function syncAggregates(): void
     {
-        // Only the columns the aggregation needs: src/error and other wide
-        // fields would otherwise be transferred on every re-sync (which runs
-        // on each upload, like, view and delete of an image in the set).
-        $images = $this->images()
-            ->select('id', 'status', 'likes_count', 'views_count', 'score')
-            ->get();
+        $this->newQuery()->getConnection()->transaction(function () {
+            // Hold the set's row lock across the whole read-sum-then-write.
+            // The view path's counter delta (WaterfallImageResource::
+            // recordView) takes the same lock, so a delta can no longer land
+            // between this read and write only to be overwritten by the older
+            // sum — a lost update nothing would later correct for an
+            // otherwise quiet set. Concurrent syncs serialise here too.
+            if (static::query()->lockForUpdate()->find($this->getKey()) === null) {
+                return; // the set was deleted while this sync waited on the lock
+            }
 
-        $published = $images->where('status', WaterfallImage::STATUS_PUBLISHED);
-        $failed = $images->where('status', WaterfallImage::STATUS_FAILED);
+            // Only the columns the aggregation needs: src/error and other wide
+            // fields would otherwise be transferred on every re-sync (which runs
+            // on each upload, like, view and delete of an image in the set).
+            $images = $this->images()
+                ->select('id', 'status', 'likes_count', 'views_count', 'score')
+                ->get();
 
-        $this->images_count = $images->count();
-        $this->likes_count = (int) $images->sum('likes_count');
-        $this->views_count = (int) $images->sum('views_count');
-        $this->score = (float) $images->sum('score');
-        $this->cover_image_id = $published->first()?->id;
+            $published = $images->where('status', WaterfallImage::STATUS_PUBLISHED);
+            $failed = $images->where('status', WaterfallImage::STATUS_FAILED);
 
-        if ($published->isNotEmpty()) {
-            $this->status = self::STATUS_PUBLISHED;
-        } elseif ($images->isNotEmpty() && $failed->count() === $images->count()) {
-            $this->status = self::STATUS_FAILED;
-        } else {
-            $this->status = self::STATUS_PENDING;
-        }
+            $this->images_count = $images->count();
+            $this->likes_count = (int) $images->sum('likes_count');
+            $this->views_count = (int) $images->sum('views_count');
+            $this->score = (float) $images->sum('score');
+            $this->cover_image_id = $published->first()?->id;
 
-        $this->save();
+            if ($published->isNotEmpty()) {
+                $this->status = self::STATUS_PUBLISHED;
+            } elseif ($images->isNotEmpty() && $failed->count() === $images->count()) {
+                $this->status = self::STATUS_FAILED;
+            } else {
+                $this->status = self::STATUS_PENDING;
+            }
+
+            $this->save();
+        });
     }
 
     /**

@@ -6,6 +6,7 @@ lcoy-waterfall:
       file_too_large: "The image exceeds the maximum allowed size of {max} MB."
       mime_not_allowed: "This image type is not allowed."
       file_unreadable: "The uploaded file could not be inspected."
+      staging_failed: "The upload could not be stored on the server. Please check the server's storage and try again."
       hourly_limit: "You have reached your hourly upload limit. Please try again later."
       concurrency_limit: "You already have images being processed. Please wait for them to finish."
       title_too_long: "The title must not exceed 200 characters."

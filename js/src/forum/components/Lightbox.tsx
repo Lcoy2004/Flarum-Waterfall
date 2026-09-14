@@ -118,6 +118,14 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
 
   protected navigate(direction: number): void {
     const total = this.attrs.images.length;
+
+    // The list can be emptied by a delete while the component is still
+    // mounted (the parent unmounts it, but a keypress in that same tick would
+    // otherwise divide by zero and poison the index with NaN).
+    if (total === 0) {
+      return;
+    }
+
     const next = (this.attrs.index + direction + total) % total;
     this.scale = 1;
     this.panX = 0;

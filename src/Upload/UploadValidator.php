@@ -87,7 +87,10 @@ class UploadValidator
             throw new ValidationException(['file' => $this->translator->trans('lcoy-waterfall.api.errors.upload_error')]);
         }
 
-        $maxSizeMb = (int) $this->settings->get('lcoy-waterfall.max_size_mb', 10);
+        // Clamped at 1: the admin UI enforces a minimum, but a hand-edited
+        // database row holding 0 (or a negative value) would otherwise reject
+        // every file outright, bricking uploads with a confusing size error.
+        $maxSizeMb = max(1, (int) $this->settings->get('lcoy-waterfall.max_size_mb', 10));
 
         // getSize() is nullable per the PSR-7 uploaded-file contract; when the
         // size cannot be determined, fail closed rather than skipping the cap.
