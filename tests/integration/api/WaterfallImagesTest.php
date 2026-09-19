@@ -262,4 +262,47 @@ class WaterfallImagesTest extends TestCase
         $this->assertEquals(403, $response->getStatusCode());
         $this->assertNotNull(WaterfallImage::find(3));
     }
+
+    /**
+     * Deleting an image has to leave its set's denormalised counters and cover
+     * in step with the rows that are left; the feed reads those columns
+     * without joining the images table, and the offset it pages through comes
+     * from images_count.
+     */
+    #[Test]
+    public function deleting_an_image_refreshes_its_set_aggregates()
+    {
+        $now = Carbon::now();
+
+        $this->prepareDatabase([
+            WaterfallSet::class => [
+                ['id' => 20, 'user_id' => 2, 'title' => 'Pair', 'cover_image_id' => 30, 'images_count' => 2, 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+            ],
+            WaterfallImage::class => [
+                ['id' => 30, 'user_id' => 2, 'set_id' => 20, 'position' => 0, 'src' => '/file/s1.png', 'thumb' => null, 'title' => 'Cover', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+                ['id' => 31, 'user_id' => 2, 'set_id' => 20, 'position' => 1, 'src' => '/file/s2.png', 'thumb' => null, 'title' => 'Second', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+            ],
+        ]);
+
+        $response = $this->send(
+            $this->request('DELETE', '/api/waterfall-images/31', ['authenticatedAs' => 2])
+        );
+
+        $this->assertEquals(204, $response->getStatusCode());
+
+        $set = WaterfallSet::find(20);
+
+        $this->assertEquals(1, $set->images_count);
+        $this->assertEquals(30, $set->cover_image_id);
+        $this->assertEquals(WaterfallSet::STATUS_PUBLISHED, $set->status);
+
+        // Removing the last image takes the now-empty set with it: a set with
+        // no images has nothing to show and would render as a blank card.
+        $response = $this->send(
+            $this->request('DELETE', '/api/waterfall-images/30', ['authenticatedAs' => 2])
+        );
+
+        $this->assertEquals(204, $response->getStatusCode());
+        $this->assertNull(WaterfallSet::find(20));
+    }
 }

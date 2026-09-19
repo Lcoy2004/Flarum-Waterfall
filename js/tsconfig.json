@@ -6,6 +6,16 @@
   // typings for access to `dayjs` and `$` in the global namespace.
   "include": ["src/**/*", "tests/**/*", "../../../flarum/core/js/dist-typings/@types/**/*", "@types/**/*"],
   "compilerOptions": {
+    // Load only the global typings this project actually uses. Without this,
+    // tsc pulls in every package under node_modules/@types — including the
+    // transitive @types/node, whose newest releases use syntax the pinned
+    // TypeScript cannot parse. Those parse errors are not suppressed by
+    // skipLibCheck (it only covers type errors, not syntax) and buried the
+    // real output of `check-typings` under ~50 unrelated failures. The
+    // frontend talks to the browser, not to Node, so jest is all that is
+    // needed; add a name here if a global from another @types package is
+    // ever relied upon.
+    "types": ["jest"],
     // This will output typings to `dist-typings`.
     "declarationDir": "./dist-typings",
     // The webpack build is transpile-only, so nothing else would fail on an

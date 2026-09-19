@@ -292,7 +292,11 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
                     {item.file.name}
                   </div>
                   <div className="WaterfallUploadModal-itemMeta">
-                    {item.status === 'ready' && item.width && item.height && <span>{item.width}×{item.height}</span>}
+                    {item.status === 'ready' && item.width && item.height && (
+                      <span>
+                        {item.width}×{item.height}
+                      </span>
+                    )}
                     {item.status === 'uploading' && <span>{item.progress}%</span>}
                     {item.status === 'done' && (
                       <span className="WaterfallUploadModal-itemDone">

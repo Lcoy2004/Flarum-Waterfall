@@ -93,10 +93,12 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     }
 
     Lightbox.viewSession.add(image.id()!);
-    app.request({
-      method: 'POST',
-      url: `${app.forum.attribute('apiUrl')}/waterfall-images/${image.id()}/view`,
-    }).catch(() => {});
+    app
+      .request({
+        method: 'POST',
+        url: `${app.forum.attribute('apiUrl')}/waterfall-images/${image.id()}/view`,
+      })
+      .catch(() => {});
   }
 
   protected keydownHandler = (e: KeyboardEvent) => {
@@ -221,13 +223,14 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
   protected toggleLike(image: WaterfallImage): void {
     const liked = image.isLiked();
 
-    app.request({
-      method: liked ? 'DELETE' : 'POST',
-      url: `${app.forum.attribute('apiUrl')}/waterfall-images/${image.id()}/like`,
-      // Re-include the likes relation so the local store receives the full
-      // liker list, not just linkage data.
-      params: { include: 'user,likes' },
-    })
+    app
+      .request({
+        method: liked ? 'DELETE' : 'POST',
+        url: `${app.forum.attribute('apiUrl')}/waterfall-images/${image.id()}/like`,
+        // Re-include the likes relation so the local store receives the full
+        // liker list, not just linkage data.
+        params: { include: 'user,likes' },
+      })
       .then((payload) => {
         app.store.pushPayload(payload as Parameters<typeof app.store.pushPayload>[0]);
         m.redraw();
@@ -295,13 +298,7 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
           ondblclick={this.onDoubleClick}
         >
           {image.src() ? (
-            <img
-              className="WaterfallLightbox-img"
-              src={image.src()}
-              alt={image.title() || ''}
-              draggable={false}
-              style={{ transform }}
-            />
+            <img className="WaterfallLightbox-img" src={image.src()} alt={image.title() || ''} draggable={false} style={{ transform }} />
           ) : (
             // A failed (or still-processing) image has no src; show why
             // instead of a broken-image icon. The error text is filtered

@@ -514,9 +514,7 @@ export default class WaterfallCard<CustomAttrs extends WaterfallCardAttrs = Wate
           )}
 
           {status === 'failed' && (
-            <span className="WaterfallCard-badge WaterfallCard-badge--failed">
-              {app.translator.trans('lcoy-waterfall.forum.card.failed_badge')}
-            </span>
+            <span className="WaterfallCard-badge WaterfallCard-badge--failed">{app.translator.trans('lcoy-waterfall.forum.card.failed_badge')}</span>
           )}
         </button>
 

@@ -54,14 +54,19 @@ jobs:
 
           echo "js/package.json matches the tag (${GITHUB_REF_NAME})."
 
-      # --no-frozen-lockfile because the repository does not carry a
-      # js/yarn.lock. Committing one (and then dropping this flag) would make
-      # releases byte-reproducible; until then the ranges in js/package.json
-      # are resolved fresh on every run.
+      # --frozen-lockfile: the committed js/yarn.lock is what gets installed,
+      # so two runs of this job (and a local build) resolve byte-identical
+      # dependency trees. Without it a fresh resolve could pull a new
+      # transitive release into the build and change — or break — an artifact
+      # that is supposed to depend only on the tag.
+      #
+      # The flag also fails the job when js/package.json and js/yarn.lock
+      # disagree, which is the reminder to commit a regenerated lock file
+      # whenever a dependency is added.
       - name: Build the frontend bundles
         working-directory: js
         run: |
-          yarn install --no-frozen-lockfile --network-timeout 600000
+          yarn install --frozen-lockfile --network-timeout 600000
           yarn build
 
       # Explicit list: this is the set of files the extension needs at runtime

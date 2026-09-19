@@ -6,6 +6,16 @@
 # extend.php loads it directly, so the extension must work without a build step.
 /js/node_modules/
 
+# Typings emitted by `yarn build-typings` — a build output, not a source of
+# truth, and already covered by the js/dist bundle that is committed.
+/js/dist-typings/
+
+# Test harness state: PHPUnit's result cache records per-machine timings and
+# past failures, and .tmp holds the throwaway Flarum site (sqlite database,
+# storage, sessions) the integration suite boots. Neither belongs in git.
+/tests/.phpunit.cache/
+/tests/.tmp/
+
 # Local artifacts that are not part of the package.
 /wf_test_upload.png
 

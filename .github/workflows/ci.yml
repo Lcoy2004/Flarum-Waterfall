@@ -1,0 +1,117 @@
+# Continuous integration.
+#
+# Every push to the default branch and every pull request runs the checks that
+# until now only ran by hand: the integration suite, the frontend's format,
+# typings, unit tests and a bundle rebuild. A regression is then caught by the
+# commit that introduces it instead of by whoever installs the release.
+#
+# This is deliberately separate from release.yml, which only builds and
+# publishes: a tag is meant to promote an already-verified commit, not to be
+# the first place the code is tested.
+name: CI
+
+on:
+  push:
+    branches: ['master']
+  pull_request:
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Report both versions even when one fails: a lower-bound failure and an
+      # upper-bound failure need different fixes.
+      fail-fast: false
+      matrix:
+        # Flarum core 2.x requires PHP ^8.3, and 8.5 is what the extension is
+        # deployed on. The two ends catch an accidental dependency on newer
+        # syntax as well as anything that breaks on the live version.
+        php: ['8.3', '8.5']
+
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          # What Flarum core boots with, plus the sqlite driver the integration
+          # harness uses for its throwaway database. setup-php already provides
+          # the always-bundled extensions; these are the ones it does not
+          # enable by default.
+          extensions: bcmath, curl, dom, exif, fileinfo, gd, iconv, intl, mbstring, openssl, pdo_mysql, pdo_sqlite, simplexml, sqlite3, xml, xmlreader, xmlwriter, zip
+          coverage: none
+
+      # A warning here (an unknown key, an unbounded version) is treated as a
+      # failure: this file is what Packagist reads to decide what may be
+      # installed.
+      - name: Validate composer.json
+        run: composer validate --no-check-publish --strict
+
+      - name: Install dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      # Cheap, and the fastest way to catch a broken merge: a parse error in a
+      # file the suite never loads (a migration, an unused class) would
+      # otherwise reach a release.
+      - name: Lint every PHP file
+        run: find src migrations tests -name '*.php' -print0 | xargs -0 -n1 -P4 php -l
+
+      # Builds the throwaway Flarum site (sqlite) the integration suite boots.
+      - name: Prepare the test database
+        run: composer test:setup
+
+      - name: Run the integration suite
+        run: composer test
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: yarn
+          cache-dependency-path: js/yarn.lock
+
+      # --frozen-lockfile for the same reason as in release.yml: the build must
+      # depend on the committed lock file, not on whatever is published today.
+      - name: Install dependencies
+        working-directory: js
+        run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - name: Check formatting
+        working-directory: js
+        run: yarn format-check
+
+      # The webpack build is transpile-only, so this is the only thing that
+      # checks types at all.
+      - name: Check typings
+        working-directory: js
+        run: yarn check-typings
+
+      - name: Run unit tests
+        working-directory: js
+        run: yarn test
+
+      - name: Build the bundles
+        working-directory: js
+        run: yarn build
+
+      # extend.php loads js/dist directly, so a source change that was not
+      # accompanied by a rebuilt bundle would be shipped to every user who
+      # installs from git. Fails when the two have drifted apart.
+      - name: Verify the committed bundle matches the source
+        run: git diff --exit-code -- js/dist

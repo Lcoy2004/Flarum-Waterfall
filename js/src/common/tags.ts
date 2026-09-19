@@ -19,11 +19,7 @@ export const MAX_TAG_LENGTH = 20;
  * case-insensitively ("Beach" and "beach" read as one tag) and at most
  * MAX_TAGS tags are kept in total.
  */
-export function splitTagDraft(
-  raw: string,
-  existing: readonly string[],
-  commitTail: boolean
-): { tags: string[]; draft: string } {
+export function splitTagDraft(raw: string, existing: readonly string[], commitTail: boolean): { tags: string[]; draft: string } {
   const segments = raw.split(',');
   const tail = segments.pop() ?? '';
 

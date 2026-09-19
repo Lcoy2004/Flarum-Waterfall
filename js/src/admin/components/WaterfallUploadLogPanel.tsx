@@ -25,12 +25,19 @@ export default class WaterfallUploadLogPanel extends Component {
       <div className="WaterfallUploadLogPanel">
         <div className="WaterfallUploadLogPanel-header">
           <h4>{app.translator.trans('lcoy-waterfall.admin.upload_log.title')}</h4>
-          <Button className="Button Button--icon" icon="fas fa-sync" aria-label={app.translator.trans('lcoy-waterfall.admin.upload_log.refresh')} onclick={() => this.load()} />
+          <Button
+            className="Button Button--icon"
+            icon="fas fa-sync"
+            aria-label={app.translator.trans('lcoy-waterfall.admin.upload_log.refresh')}
+            onclick={() => this.load()}
+          />
         </div>
 
         {this.loading && <LoadingIndicator />}
 
-        {this.logs !== null && this.logs.length === 0 && <p className="WaterfallUploadLogPanel-empty">{app.translator.trans('lcoy-waterfall.admin.upload_log.empty')}</p>}
+        {this.logs !== null && this.logs.length === 0 && (
+          <p className="WaterfallUploadLogPanel-empty">{app.translator.trans('lcoy-waterfall.admin.upload_log.empty')}</p>
+        )}
 
         {this.logs !== null && this.logs.length > 0 && (
           <div className="WaterfallUploadLogPanel-tableWrapper">
@@ -56,7 +63,11 @@ export default class WaterfallUploadLogPanel extends Component {
                       </span>
                     </td>
                     <td>{log.httpCode() ?? '—'}</td>
-                    <td>{log.durationMs() != null ? app.translator.trans('lcoy-waterfall.admin.upload_log.milliseconds', { ms: log.durationMs() }) : '—'}</td>
+                    <td>
+                      {log.durationMs() != null
+                        ? app.translator.trans('lcoy-waterfall.admin.upload_log.milliseconds', { ms: log.durationMs() })
+                        : '—'}
+                    </td>
                     <td>{log.attempts()}</td>
                     <td className="WaterfallUploadLogPanel-error">{log.error() || '—'}</td>
                     <td>{log.createdAt()?.toLocaleString() ?? ''}</td>

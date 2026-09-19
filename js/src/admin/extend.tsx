@@ -37,7 +37,10 @@ export default [
       90
     )
     // -- Image host ------------------------------------------------------
-    .customSetting(() => <h3 className="WaterfallSettings-heading">{app.translator.trans('lcoy-waterfall.admin.settings.image_host_heading')}</h3>, 100)
+    .customSetting(
+      () => <h3 className="WaterfallSettings-heading">{app.translator.trans('lcoy-waterfall.admin.settings.image_host_heading')}</h3>,
+      100
+    )
     .setting(
       () => ({
         setting: 'lcoy-waterfall.upload_url',

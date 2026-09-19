@@ -99,10 +99,7 @@ export default class WaterfallState {
     this.loading = true;
 
     app.store
-      .find<WaterfallSet[]>(
-        'waterfall-sets',
-        this.requestParams({ page: { offset: 0, limit: this.perPage } })
-      )
+      .find<WaterfallSet[]>('waterfall-sets', this.requestParams({ page: { offset: 0, limit: this.perPage } }))
       .then((sets) => {
         if (epoch !== this.loadEpoch) {
           return;
@@ -144,10 +141,7 @@ export default class WaterfallState {
     this.loadingMore = true;
 
     app.store
-      .find<WaterfallSet[]>(
-        'waterfall-sets',
-        this.requestParams({ page: { offset: this.offset, limit: this.perPage } })
-      )
+      .find<WaterfallSet[]>('waterfall-sets', this.requestParams({ page: { offset: this.offset, limit: this.perPage } }))
       .then((sets) => {
         if (epoch !== this.loadEpoch) {
           return;

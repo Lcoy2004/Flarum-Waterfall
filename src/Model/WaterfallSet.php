@@ -74,43 +74,7 @@ class WaterfallSet extends AbstractModel
      */
     public function syncAggregates(): void
     {
-        $this->newQuery()->getConnection()->transaction(function () {
-            // Hold the set's row lock across the whole read-sum-then-write.
-            // The view path's counter delta (WaterfallImageResource::
-            // recordView) takes the same lock, so a delta can no longer land
-            // between this read and write only to be overwritten by the older
-            // sum — a lost update nothing would later correct for an
-            // otherwise quiet set. Concurrent syncs serialise here too.
-            if (static::query()->lockForUpdate()->find($this->getKey()) === null) {
-                return; // the set was deleted while this sync waited on the lock
-            }
-
-            // Only the columns the aggregation needs: src/error and other wide
-            // fields would otherwise be transferred on every re-sync (which runs
-            // on each upload, like, view and delete of an image in the set).
-            $images = $this->images()
-                ->select('id', 'status', 'likes_count', 'views_count', 'score')
-                ->get();
-
-            $published = $images->where('status', WaterfallImage::STATUS_PUBLISHED);
-            $failed = $images->where('status', WaterfallImage::STATUS_FAILED);
-
-            $this->images_count = $images->count();
-            $this->likes_count = (int) $images->sum('likes_count');
-            $this->views_count = (int) $images->sum('views_count');
-            $this->score = (float) $images->sum('score');
-            $this->cover_image_id = $published->first()?->id;
-
-            if ($published->isNotEmpty()) {
-                $this->status = self::STATUS_PUBLISHED;
-            } elseif ($images->isNotEmpty() && $failed->count() === $images->count()) {
-                $this->status = self::STATUS_FAILED;
-            } else {
-                $this->status = self::STATUS_PENDING;
-            }
-
-            $this->save();
-        });
+        static::syncAggregatesForSet((int) $this->getKey());
     }
 
     /**
@@ -119,14 +83,70 @@ class WaterfallSet extends AbstractModel
      */
     public static function syncAggregatesForImage(WaterfallImage $image): void
     {
-        if (! $image->set_id) {
-            return;
+        if ($image->set_id) {
+            static::syncAggregatesForSet((int) $image->set_id);
+        }
+    }
+
+    /**
+     * Recompute one set's counters, addressed by id.
+     *
+     * The row lock is held across the whole read-images-then-write-totals
+     * sequence. The view path's counter delta (WaterfallImageResource::
+     * recordView) takes the same lock, so a delta can no longer land between
+     * this read and write only to be overwritten by the older sum — a lost
+     * update nothing would later correct for an otherwise quiet set.
+     * Concurrent syncs serialise here too.
+     *
+     * The recomputation deliberately runs on the row read *under* that lock
+     * rather than on whatever instance the caller happened to hold: the ids
+     * are all that is taken from the caller, which also saves the caller's
+     * own lookup — an upload used to load the same set row three times (once
+     * to authorise the set_id, then once per sync) to reach this point.
+     */
+    public static function syncAggregatesForSet(int $setId): void
+    {
+        (new static)->getConnection()->transaction(function () use ($setId) {
+            $set = static::query()->lockForUpdate()->find($setId);
+
+            if ($set === null) {
+                return; // the set was deleted while this sync waited on the lock
+            }
+
+            $set->recomputeAggregates();
+        });
+    }
+
+    /**
+     * Sum this set's images into the denormalised columns and persist them.
+     * Assumes the caller holds the set's row lock (see syncAggregatesForSet).
+     */
+    protected function recomputeAggregates(): void
+    {
+        // Only the columns the aggregation needs: src/error and other wide
+        // fields would otherwise be transferred on every re-sync (which runs
+        // on each upload, like, view and delete of an image in the set).
+        $images = $this->images()
+            ->select('id', 'status', 'likes_count', 'views_count', 'score')
+            ->get();
+
+        $published = $images->where('status', WaterfallImage::STATUS_PUBLISHED);
+        $failed = $images->where('status', WaterfallImage::STATUS_FAILED);
+
+        $this->images_count = $images->count();
+        $this->likes_count = (int) $images->sum('likes_count');
+        $this->views_count = (int) $images->sum('views_count');
+        $this->score = (float) $images->sum('score');
+        $this->cover_image_id = $published->first()?->id;
+
+        if ($published->isNotEmpty()) {
+            $this->status = self::STATUS_PUBLISHED;
+        } elseif ($images->isNotEmpty() && $failed->count() === $images->count()) {
+            $this->status = self::STATUS_FAILED;
+        } else {
+            $this->status = self::STATUS_PENDING;
         }
 
-        $set = static::query()->find($image->set_id);
-
-        if ($set) {
-            $set->syncAggregates();
-        }
+        $this->save();
     }
 }

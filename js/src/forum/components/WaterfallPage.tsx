@@ -162,9 +162,7 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
 
     const initial = complete
       ? Promise.resolve(loaded)
-      : app.store
-          .find<WaterfallSet>('waterfall-sets', set.id()!, { include: 'user,coverImage,images' })
-          .then((fetched) => this.setImages(fetched));
+      : app.store.find<WaterfallSet>('waterfall-sets', set.id()!, { include: 'user,coverImage,images' }).then((fetched) => this.setImages(fetched));
 
     initial
       .then((images) => {
@@ -236,12 +234,7 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
   protected loadMoreImages(): void {
     const set = this.openSet;
 
-    if (
-      !set ||
-      this.loadingMoreImages ||
-      this.openSetImages.length === 0 ||
-      this.openSetLoadedCount >= set.imagesCount()
-    ) {
+    if (!set || this.loadingMoreImages || this.openSetImages.length === 0 || this.openSetLoadedCount >= set.imagesCount()) {
       return;
     }
 
