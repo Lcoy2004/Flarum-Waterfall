@@ -14,6 +14,7 @@ namespace Lcoy\Waterfall\Jobs;
 use Flarum\Queue\AbstractJob;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Illuminate\Contracts\Events\Dispatcher;
+use Illuminate\Queue\Jobs\SyncJob;
 use Lcoy\Waterfall\Event\ImageUploadFailed;
 use Lcoy\Waterfall\Event\ImageWasUploaded;
 use Lcoy\Waterfall\Model\WaterfallImage;
@@ -36,9 +37,41 @@ use Psr\Log\LoggerInterface;
  */
 class ProcessImageUploadJob extends AbstractJob
 {
-    // Upload log rows older than this are pruned opportunistically after
-    // each transfer, so the audit trail stays bounded.
+    // Upload log rows older than this are pruned after every successful
+    // transfer, so the audit trail stays bounded.
     protected const LOG_RETENTION_DAYS = 3;
+
+    /**
+     * How many deliveries this job may take part in.
+     *
+     * Flarum's worker runs with a single try by default, and a job released
+     * past its tries is failed *before* handle() is reached on the next
+     * delivery. Declaring the budget is what lets the quota deferral (see
+     * canBeDeferred()) come back at all — with the default of one try it
+     * could only end in a job that never runs again.
+     */
+    public int $tries = 3;
+
+    /**
+     * How long one delivery's transfers may take in total, in seconds.
+     *
+     * Flarum builds its database queue with a hardcoded retry_after of 60
+     * seconds: a job still running after that is read as abandoned and handed
+     * to a second worker, which then sends the same bytes to the host again
+     * while the first run is still going — two copies at the host, two log
+     * rows, and a race over the image row. The budget keeps both transfers,
+     * every attempt and the backoff between them inside that window, with
+     * room to spare for the row writes and the retention prune that follow.
+     */
+    protected const TRANSFER_BUDGET_SECONDS = 45;
+
+    /**
+     * The smallest slice of the budget worth starting a thumbnail transfer
+     * with. The card copy is optional by design — the feed falls back to the
+     * full image — so once the original has spent the budget the thumbnail is
+     * dropped rather than allowed to push the delivery past its deadline.
+     */
+    protected const THUMBNAIL_MIN_BUDGET_SECONDS = 8;
 
     public function __construct(
         protected int $imageId,
@@ -84,6 +117,21 @@ class ProcessImageUploadJob extends AbstractJob
         }
 
         if (! file_exists($this->stagedPath)) {
+            // A delivery is not necessarily the first: an unexpected error
+            // re-throws, and with a tries budget above one the job comes back.
+            // By then the staged files are gone either way — the first run
+            // either deleted them after a successful transfer or freed them
+            // while failing. Anything already resolved is therefore done, and
+            // marking it failed again would strand a copy the host is already
+            // serving.
+            if ($image->status !== WaterfallImage::STATUS_PENDING) {
+                if ($stagedThumbPath !== null) {
+                    @unlink($stagedThumbPath);
+                }
+
+                return;
+            }
+
             WaterfallUploadLog::query()->create([
                 'image_id' => $image->id,
                 'user_id' => $image->user_id,
@@ -100,18 +148,36 @@ class ProcessImageUploadJob extends AbstractJob
             return;
         }
 
-        // Site-wide per-minute quota: over-quota jobs go back onto the queue
-        // with a delay (never dropped) and the deferral is logged.
+        // Site-wide per-minute quota. Over-quota jobs are put back on the
+        // queue with a delay when the queue can actually bring them back, and
+        // failed honestly when it cannot (see canBeDeferred()).
+        //
+        // What must never happen is the job ending without either: a pending
+        // row counts against the uploader's concurrency allowance
+        // (RateLimiter::assertUserMayUpload), so a dropped job would lock them
+        // out of uploading until they deleted the card by hand, and the staged
+        // file would sit in the spool forever.
         if (! $rateLimiter->reserveTransferSlot()) {
+            $deferrable = $this->canBeDeferred();
+
             WaterfallUploadLog::query()->create([
                 'image_id' => $image->id,
                 'user_id' => $image->user_id,
-                'status' => WaterfallUploadLog::STATUS_DEFERRED,
-                'error' => 'Site-wide per-minute transfer quota exceeded; job delayed.',
+                'status' => $deferrable ? WaterfallUploadLog::STATUS_DEFERRED : WaterfallUploadLog::STATUS_FAILED,
+                'error' => $deferrable
+                    ? 'Site-wide per-minute transfer quota exceeded; job delayed.'
+                    : 'Site-wide per-minute transfer quota exceeded, and this queue cannot run the job again.',
             ]);
 
-            // Re-attempt at the start of the next minute bucket.
-            $this->release(max(5, 60 - (int) date('s')));
+            if ($deferrable) {
+                // Re-attempt at the start of the next minute bucket.
+                $this->release(max(5, 60 - (int) date('s')));
+
+                return;
+            }
+
+            $this->markFailed($image, 'transfer_quota_exceeded', 'The site is at its upload limit right now. Please try again in a minute.', $logger, $events);
+            $this->cleanupStagedFile($settings, $stagedThumbPath);
 
             return;
         }
@@ -122,8 +188,17 @@ class ProcessImageUploadJob extends AbstractJob
             'status' => WaterfallUploadLog::STATUS_PENDING,
         ]);
 
+        // Whether the bytes reached the host and the row went live. Everything
+        // after that point is bookkeeping, and must not be able to turn a
+        // published image back into a failed one (see the catch below).
+        $published = false;
+
+        // Everything from here to the end of the transfers has to fit inside
+        // Flarum's retry_after (see TRANSFER_BUDGET_SECONDS).
+        $deadline = microtime(true) + self::TRANSFER_BUDGET_SECONDS;
+
         try {
-            $result = $uploader->upload($this->stagedPath, $this->filename);
+            $result = $uploader->upload($this->stagedPath, $this->filename, $this->remainingBudget($deadline));
 
             // The card copy (when the browser sent one) goes to the host
             // before the row is written, so the publish stays a single write.
@@ -133,7 +208,7 @@ class ProcessImageUploadJob extends AbstractJob
             // The host's own thumbnail stays as a middle fallback: hosts that
             // return one keep working exactly as they did before browsers
             // started sending a copy.
-            $thumbSrc = $this->transferThumbnail($uploader, $rateLimiter, $logger, $stagedThumbPath)
+            $thumbSrc = $this->transferThumbnail($uploader, $rateLimiter, $logger, $stagedThumbPath, $deadline)
                 ?? $result->thumb
                 ?? $result->src;
 
@@ -149,6 +224,8 @@ class ProcessImageUploadJob extends AbstractJob
                 'score' => $calculator->calculate($image),
             ])->save();
 
+            $published = true;
+
             // Publishing changes the set's cover/status/counters.
             WaterfallSet::syncAggregatesForImage($image);
 
@@ -160,16 +237,6 @@ class ProcessImageUploadJob extends AbstractJob
             ])->save();
 
             $this->cleanupStagedFile($settings, $stagedThumbPath);
-
-            // Retention pruning runs on ~5% of successful transfers: the
-            // indexed range DELETE is cheap, but there is no reason to pay it
-            // on every single upload — the 3-day window makes a delayed prune
-            // invisible.
-            if (random_int(1, 20) === 1) {
-                $this->pruneOldLogs();
-            }
-
-            $events->dispatch(new ImageWasUploaded($image, $image->user));
         } catch (UploadException $e) {
             $log->forceFill([
                 'status' => WaterfallUploadLog::STATUS_FAILED,
@@ -183,6 +250,24 @@ class ProcessImageUploadJob extends AbstractJob
 
             $this->cleanupStagedFile($settings, $stagedThumbPath);
         } catch (\Throwable $e) {
+            if ($published) {
+                // The copy is already on the host and the row says published;
+                // what threw here is the aggregate sync or the log write. The
+                // uploader has just been shown a live image, and marking it
+                // failed would contradict both the host's copy and the SUCCESS
+                // row the upload log is meant to hold — so the row is left
+                // alone, the spool is still freed, and the exception is
+                // re-thrown so the job lands in failed_jobs for investigation.
+                $logger->error('lcoy-waterfall: image {id} was published but post-transfer bookkeeping failed: {message}', [
+                    'id' => $image->id,
+                    'message' => $e->getMessage(),
+                ]);
+
+                $this->cleanupStagedFile($settings, $stagedThumbPath);
+
+                throw $e;
+            }
+
             // Unexpected failure (bug, storage/DB error, fatal in the upload
             // stack, ...). Still mark the image failed and free the spool file
             // so it cannot stay pending forever, then re-throw so the job is
@@ -198,6 +283,42 @@ class ProcessImageUploadJob extends AbstractJob
 
             throw $e;
         }
+
+        // The retention prune runs on every successful transfer rather than on
+        // a random sample of them: the DELETE is an indexed range over
+        // created_at, so it costs almost nothing when there is nothing to
+        // drop, and a sampled prune is a promise the log may never keep.
+        //
+        // Both calls sit outside the try — neither is part of the transfer,
+        // and neither failing may un-publish an image that is already live.
+        $this->pruneOldLogs();
+
+        $events->dispatch(new ImageWasUploaded($image, $image->user));
+    }
+
+    /**
+     * Whether the queue can run this job again after a release().
+     *
+     * Two cases where it cannot — and where deferring would therefore leave
+     * the image pending forever, holding a concurrency slot with its spool
+     * file still on disk:
+     *
+     *  - the sync driver (Flarum's default, when no queue is configured) runs
+     *    the job inline, so release() only flags the run as released and it
+     *    ends right there;
+     *  - once the deliveries reach $tries, the worker fails the job *before*
+     *    handle() is reached, so the run that released it was the last one.
+     *
+     * A null $job means the job was dispatched to run now rather than through
+     * a queue, where there is nothing to release back onto either.
+     */
+    protected function canBeDeferred(): bool
+    {
+        if ($this->job === null || $this->job instanceof SyncJob) {
+            return false;
+        }
+
+        return $this->attempts() < $this->tries;
     }
 
     /**
@@ -213,8 +334,9 @@ class ProcessImageUploadJob extends AbstractJob
     /**
      * Forward the staged card thumbnail to the image host and return its src,
      * or null when there is no thumbnail, the site-wide transfer quota is
-     * exhausted for this minute, or the transfer failed for any reason —
-     * the caller then falls back to the full-size src.
+     * exhausted for this minute, the delivery's time budget is spent, or the
+     * transfer failed for any reason — the caller then falls back to the
+     * full-size src.
      *
      * The transfer is counted against the same per-minute quota as the
      * original: it is a real host request. A quota miss is not deferred (the
@@ -225,9 +347,20 @@ class ProcessImageUploadJob extends AbstractJob
         ExternalImageHostUploader $uploader,
         RateLimiter $rateLimiter,
         LoggerInterface $logger,
-        ?string $stagedThumbPath
+        ?string $stagedThumbPath,
+        float $deadline
     ): ?string {
         if ($stagedThumbPath === null) {
+            return null;
+        }
+
+        $remaining = $this->remainingBudget($deadline);
+
+        if ($remaining < self::THUMBNAIL_MIN_BUDGET_SECONDS) {
+            $logger->info('lcoy-waterfall: thumbnail for image {id} skipped, the transfer budget is spent; the card will use the full image', [
+                'id' => $this->imageId,
+            ]);
+
             return null;
         }
 
@@ -248,7 +381,7 @@ class ProcessImageUploadJob extends AbstractJob
             // the browser's WebP away through a second lossy encode and handed
             // the card a bigger file. The staged path carries the sniffed
             // extension, so this is the real format.
-            return $uploader->upload($stagedThumbPath, 'thumb.'.pathinfo($stagedThumbPath, PATHINFO_EXTENSION))->src;
+            return $uploader->upload($stagedThumbPath, 'thumb.'.pathinfo($stagedThumbPath, PATHINFO_EXTENSION), $remaining)->src;
         } catch (\Throwable $e) {
             $logger->warning('lcoy-waterfall: thumbnail transfer for image {id} failed: {message}; the card will use the full image', [
                 'id' => $this->imageId,
@@ -257,6 +390,14 @@ class ProcessImageUploadJob extends AbstractJob
 
             return null;
         }
+    }
+
+    /**
+     * Whole seconds left before the delivery's deadline, never negative.
+     */
+    protected function remainingBudget(float $deadline): int
+    {
+        return (int) max(0, floor($deadline - microtime(true)));
     }
 
     protected function markFailed(

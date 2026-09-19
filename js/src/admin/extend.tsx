@@ -187,6 +187,18 @@ export default [
     )
     // -- Frontend display ------------------------------------------------
     .customSetting(() => <h3 className="WaterfallSettings-heading">{app.translator.trans('lcoy-waterfall.admin.settings.display_heading')}</h3>, 70)
+    // The page intro sits first in this group because it is the one setting
+    // here that visitors actually read.
+    .setting(
+      () => ({
+        setting: 'lcoy-waterfall.description',
+        type: 'textarea',
+        label: app.translator.trans('lcoy-waterfall.admin.settings.description_label'),
+        placeholder: app.translator.trans('lcoy-waterfall.admin.settings.description_placeholder'),
+        help: app.translator.trans('lcoy-waterfall.admin.settings.description_help'),
+      }),
+      69
+    )
     .setting(
       () => ({
         setting: 'lcoy-waterfall.per_page',
@@ -195,7 +207,7 @@ export default [
         max: 100,
         label: app.translator.trans('lcoy-waterfall.admin.settings.per_page_label'),
       }),
-      69
+      68
     )
     .setting(
       () => ({
@@ -204,7 +216,7 @@ export default [
         min: 0,
         label: app.translator.trans('lcoy-waterfall.admin.settings.card_radius_label'),
       }),
-      68
+      67
     )
     .setting(
       () => ({
@@ -213,7 +225,7 @@ export default [
         min: 0,
         label: app.translator.trans('lcoy-waterfall.admin.settings.card_gutter_label'),
       }),
-      67
+      66
     )
     .setting(
       () => ({
@@ -221,7 +233,7 @@ export default [
         type: 'bool',
         label: app.translator.trans('lcoy-waterfall.admin.settings.show_like_button_label'),
       }),
-      66
+      65
     )
     .setting(
       () => ({
@@ -232,7 +244,7 @@ export default [
         label: app.translator.trans('lcoy-waterfall.admin.settings.slideshow_images_label'),
         help: app.translator.trans('lcoy-waterfall.admin.settings.slideshow_images_help'),
       }),
-      65
+      64
     )
     .setting(
       () => ({
@@ -241,7 +253,7 @@ export default [
         label: app.translator.trans('lcoy-waterfall.admin.settings.local_relay_label'),
         help: app.translator.trans('lcoy-waterfall.admin.settings.local_relay_help'),
       }),
-      64
+      63
     )
     .setting(
       () => ({
@@ -250,7 +262,7 @@ export default [
         min: 2,
         label: app.translator.trans('lcoy-waterfall.admin.settings.poll_interval_label'),
       }),
-      63
+      62
     )
     // Read-only upload log panel (last 100 image host transfers).
     .customSetting(() => <WaterfallUploadLogPanel />, 10),

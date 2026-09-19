@@ -154,6 +154,8 @@ class WaterfallSetResource extends AbstractDatabaseResource
                 ->set(function (WaterfallSet $set, mixed $value, FlarumContext $context) {
                     $set->tags = WaterfallSetResource::normalizeTags($value);
                 }),
+            // Published images only — what the card's badge promises has to be
+            // what a visitor can open.
             Schema\Integer::make('imagesCount'),
             Schema\Integer::make('likesCount'),
             Schema\Integer::make('viewsCount'),

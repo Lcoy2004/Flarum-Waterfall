@@ -213,6 +213,11 @@ export default class WaterfallState {
       return;
     }
 
+    // A fresh polling session starts with a clean failure count: the counter
+    // is what decides when to tell the user the status could not be
+    // refreshed, and a session that inherits a spent count would never reach
+    // the threshold again.
+    this.pollFailures = 0;
     this.pollStartedAt = Date.now();
 
     this.pollTimer = setInterval(() => {
@@ -346,8 +351,17 @@ export default class WaterfallState {
    * to the feed and start polling so the card resolves when processing ends.
    */
   addUploadedSet(set: WaterfallSet): void {
-    this.sets = [set, ...this.sets.filter((existing) => existing.id() !== set.id())];
-    this.offset += 1;
+    // A set the feed already holds is being re-announced — a retry after a
+    // partially failed upload, say. It has not moved in the server's list, so
+    // neither the prepend nor the offset bump applies: doing either would
+    // reorder the card and make the next page start one row too far in.
+    if (this.sets.some((existing) => existing.id() === set.id())) {
+      this.touch();
+    } else {
+      this.sets = [set, ...this.sets];
+      this.offset += 1;
+    }
+
     this.startPollingIfNeeded();
     m.redraw();
   }

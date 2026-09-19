@@ -60,15 +60,34 @@ class ExternalImageHostUploader
      * Upload a file to the image host with retry (exponential backoff, max 3
      * attempts) and return the resulting `src` path.
      *
+     * $budgetSeconds caps the whole transfer — every attempt and the backoff
+     * between them. A caller running inside a queue job must pass one: Flarum
+     * builds its database queue with a hardcoded retry_after of 60 seconds,
+     * so a job that overruns it has the same transfer handed to a second
+     * worker while the first is still running, and the host ends up with two
+     * copies of the file.
+     *
      * @throws UploadException on final failure
      */
-    public function upload(string $filePath, string $filename): UploadResult
+    public function upload(string $filePath, string $filename, ?int $budgetSeconds = null): UploadResult
     {
         $url = trim((string) $this->settings->get('lcoy-waterfall.upload_url', ''));
-        $timeout = (int) $this->settings->get('lcoy-waterfall.upload_timeout', 30);
+        // Floored like every other setting: Guzzle reads 0 (or a negative
+        // value) as "no timeout", which would let a host that stops answering
+        // hold a queue worker — and the staged file — for as long as the
+        // process survives.
+        $configuredTimeout = max(1, (int) $this->settings->get('lcoy-waterfall.upload_timeout', 30));
 
         if (empty($url) || ! filter_var($url, FILTER_VALIDATE_URL)) {
             throw new UploadException('image_host_not_configured', 'The image host upload URL is not configured.');
+        }
+
+        // filter_var accepts file://, ftp:// and friends, and the transfer runs
+        // inside the worker, where a stray scheme could be pointed at the local
+        // filesystem or an internal address. The admin UI already documents
+        // http/https, so this only enforces what the setting promises.
+        if (! in_array(strtolower((string) parse_url($url, PHP_URL_SCHEME)), ['http', 'https'], true)) {
+            throw new UploadException('image_host_not_configured', 'The image host upload URL must use http or https.');
         }
 
         $client = $this->client();
@@ -79,7 +98,31 @@ class ExternalImageHostUploader
         $lastException = null;
 
         while ($attempts < $maxAttempts) {
+            // What is left of the caller's budget, whole seconds; null when it
+            // set none.
+            $remaining = $budgetSeconds === null ? null : (int) floor($budgetSeconds - (microtime(true) - $startedAt));
+
+            if ($remaining !== null && $remaining < 1) {
+                // Starting another attempt could not finish inside the budget,
+                // and overrunning it is exactly what gets the transfer
+                // duplicated by the queue. A real attempt failure is left as
+                // the reason; otherwise say what actually happened.
+                $lastException ??= new UploadException(
+                    'image_host_timeout',
+                    'The upload ran out of time before the image host answered.',
+                    0,
+                    $attempts,
+                    (int) round((microtime(true) - $startedAt) * 1000)
+                );
+
+                break;
+            }
+
             $attempts++;
+
+            // An attempt gets the configured timeout, never more than what is
+            // left of the budget.
+            $timeout = $remaining === null ? $configuredTimeout : min($configuredTimeout, $remaining);
 
             try {
                 // Built per attempt on purpose: the multipart body opens the

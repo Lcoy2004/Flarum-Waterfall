@@ -133,7 +133,13 @@ class WaterfallSet extends AbstractModel
         $published = $images->where('status', WaterfallImage::STATUS_PUBLISHED);
         $failed = $images->where('status', WaterfallImage::STATUS_FAILED);
 
-        $this->images_count = $images->count();
+        // The public count, and the only definition that holds for the people
+        // who read the badge: visitors are served the published images alone
+        // (HasPublishStatus::scopeVisibleTo), so a set of two published images
+        // and one failed one shows two — counting every row advertised three
+        // and promised a card nobody but the uploader could open. The cover and
+        // the status below are picked from the same subset for the same reason.
+        $this->images_count = $published->count();
         $this->likes_count = (int) $images->sum('likes_count');
         $this->views_count = (int) $images->sum('views_count');
         $this->score = (float) $images->sum('score');

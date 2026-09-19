@@ -125,6 +125,10 @@ return [
         ->default('lcoy-waterfall.slideshow_images', 3)
         ->default('lcoy-waterfall.local_relay', false)
         ->default('lcoy-waterfall.poll_interval', 5)
+        // Empty by default: the intro is optional content, and a site that
+        // never fills it in should not get a placeholder sentence it has to
+        // notice and delete. The frontend hides the element when it is blank.
+        ->default('lcoy-waterfall.description', '')
         // Values the forum frontend needs at boot. Saving any of these clears
         // the JS cache so the new values are picked up.
         ->serializeToForum('waterfallPerPage', 'lcoy-waterfall.per_page', 'intVal')
@@ -134,13 +138,15 @@ return [
         ->serializeToForum('waterfallSlideshowImages', 'lcoy-waterfall.slideshow_images', 'intVal')
         ->serializeToForum('waterfallPollInterval', 'lcoy-waterfall.poll_interval', 'intVal')
         ->serializeToForum('waterfallMimeWhitelist', 'lcoy-waterfall.mime_whitelist')
+        ->serializeToForum('waterfallDescription', 'lcoy-waterfall.description')
         ->resetJsCacheFor('lcoy-waterfall.per_page')
         ->resetJsCacheFor('lcoy-waterfall.card_radius')
         ->resetJsCacheFor('lcoy-waterfall.card_gutter')
         ->resetJsCacheFor('lcoy-waterfall.show_like_button')
         ->resetJsCacheFor('lcoy-waterfall.slideshow_images')
         ->resetJsCacheFor('lcoy-waterfall.poll_interval')
-        ->resetJsCacheFor('lcoy-waterfall.mime_whitelist'),
+        ->resetJsCacheFor('lcoy-waterfall.mime_whitelist')
+        ->resetJsCacheFor('lcoy-waterfall.description'),
 
     new Extend\Locales(__DIR__.'/locale'),
 ];

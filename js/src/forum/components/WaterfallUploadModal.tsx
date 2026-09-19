@@ -170,7 +170,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
                   // into a single over-long tag. A paste is a finished list, so
                   // its last segment counts too; while typing, whatever follows
                   // the last comma stays in the field.
-                  this.commitTagDraft(input.value, e.inputType.startsWith('insertFromPaste'));
+                  this.commitTagDraft(input.value, (e.inputType ?? '').startsWith('insertFromPaste'));
                 }}
                 onkeydown={(e: KeyboardEvent) => {
                   if (e.key === 'Enter') {
@@ -487,19 +487,24 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
    * validation anyway, and an item without a copy is still uploadable.
    */
   protected async prepareItem(item: QueueItem): Promise<void> {
+    let source: ImageBitmap | HTMLImageElement | undefined;
+
     try {
-      const source = await this.decodeFile(item.file);
+      source = await this.decodeFile(item.file);
 
       item.width = source.width;
       item.height = source.height;
       item.thumb = await this.makeThumb(source, item.file);
-
-      if ('close' in source) {
-        source.close();
-      }
     } catch {
       // A file that will not decode here will fail server-side validation
       // anyway; leaving the label off is enough.
+    } finally {
+      // An ImageBitmap pins decoded pixels (GPU memory included) until it is
+      // closed, so the release lives in a finally: a failed encode must not
+      // leak the whole batch's bitmaps.
+      if (source && 'close' in source) {
+        source.close();
+      }
     }
 
     m.redraw();
@@ -700,20 +705,55 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
     m.redraw();
   }
 
+  /**
+   * Retry a failed item. A retry is a submit run like any other, so it must
+   * enter through the same single serial path: two retries clicked in a row
+   * would otherwise fire two parallel XHRs (breaking the per-user concurrency
+   * limit the sequential queue exists to respect) while `submitting` stayed
+   * false — leaving the progress bar, the disabled fields and the submit
+   * button all lying, the last of which could create a second set behind the
+   * user's back.
+   */
   protected retryItem(item: QueueItem): void {
+    // Single-flight with submit(): while a run owns the queue, a retry click
+    // is ignored instead of starting a second one alongside it.
+    if (this.submitting) {
+      return;
+    }
+
     item.cancelled = false;
+    item.status = 'ready';
 
     // Reuse the current set when it survived (some file succeeded); otherwise
     // a fresh set is created by submit().
-    if (this.set && this.setAdded) {
-      item.status = 'ready';
-      this.uploadItem(item);
+    if (!this.set || !this.setAdded) {
+      this.submit();
 
       return;
     }
 
-    item.status = 'ready';
-    this.submit();
+    const set = this.set;
+    const state = this.attrs.waterfallState;
+
+    this.submitting = true;
+    m.redraw();
+
+    this.uploadQueue()
+      .then(() => {
+        // A retried image can push the set back to `pending`, so hand it to
+        // the feed again: addUploadedSet() restarts the pending poll, which is
+        // what makes the transferred image appear without a page reload.
+        if (item.status === 'done') {
+          state?.addUploadedSet(set);
+        }
+      })
+      .catch(() => {})
+      .then(() => {
+        // uploadItem() resolves on load/error/abort, and uploadQueue() swallows
+        // anything else, so this always runs and `submitting` cannot stick.
+        this.submitting = false;
+        m.redraw();
+      });
   }
 
   protected uploadItem(item: QueueItem): Promise<void> {

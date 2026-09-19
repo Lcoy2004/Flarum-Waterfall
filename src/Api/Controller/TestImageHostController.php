@@ -80,7 +80,12 @@ class TestImageHostController implements RequestHandlerInterface
         try {
             $response = $client->post($url, $options);
             $status = $response->getStatusCode();
-            $body = mb_substr((string) $response->getBody(), 0, 300);
+
+            // Read, not cast-to-string: the host is free to answer with
+            // anything, redirects are followed, and `(string) $body` would
+            // pull the whole of it into memory before the prefix is taken —
+            // a large response would take the admin's test click down with it.
+            $body = (string) $response->getBody()->read(300);
 
             return new JsonResponse([
                 'ok' => $status < 400,

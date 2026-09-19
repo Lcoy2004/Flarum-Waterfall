@@ -4,7 +4,14 @@
   // This will match all .ts, .tsx, .d.ts, .js, .jsx files in your `src`
   // folder and also tells your TypeScript server to read core's global
   // typings for access to `dayjs` and `$` in the global namespace.
-  "include": ["src/**/*", "tests/**/*", "../../../flarum/core/js/dist-typings/@types/**/*", "@types/**/*"],
+  //
+  // Core's typings are looked up through the extension's own Composer tree
+  // first, then through the site's. The first entry is what a plain clone (CI)
+  // can satisfy — `composer install` puts core in the repository's `vendor/` —
+  // and the second is the working copy under a site's `vendor/lcoy/waterfall`.
+  // TypeScript ignores an include pattern that matches nothing, so the
+  // irrelevant one is harmless.
+  "include": ["src/**/*", "tests/**/*", "../vendor/flarum/core/js/dist-typings/@types/**/*", "../../../flarum/core/js/dist-typings/@types/**/*", "@types/**/*"],
   "compilerOptions": {
     // Load only the global typings this project actually uses. Without this,
     // tsc pulls in every package under node_modules/@types — including the
@@ -24,7 +31,8 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "paths": {
-      "flarum/*": ["../../../flarum/core/js/dist-typings/*"]
+      // Same two layouts as `include` above; the first match wins.
+      "flarum/*": ["../vendor/flarum/core/js/dist-typings/*", "../../../flarum/core/js/dist-typings/*"]
     },
     "baseUrl": "."
   }

@@ -37,6 +37,12 @@ class UploadValidator
     // WebP hands back a PNG, which is discarded rather than uploaded).
     protected const THUMBNAIL_EXTENSIONS = ['webp', 'jpg', 'jpeg'];
 
+    /**
+     * What an upload may be when the admin's whitelist is empty. Mirrors the
+     * setting's own default in extend.php.
+     */
+    protected const DEFAULT_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
     public function __construct(
         protected SettingsRepositoryInterface $settings,
         protected TranslatorInterface $translator
@@ -161,8 +167,14 @@ class UploadValidator
      */
     public function whitelist(): array
     {
-        $raw = (string) $this->settings->get('lcoy-waterfall.mime_whitelist', 'jpg,jpeg,png,gif,webp');
+        $raw = (string) $this->settings->get('lcoy-waterfall.mime_whitelist', implode(',', self::DEFAULT_EXTENSIONS));
 
-        return array_values(array_filter(array_map('trim', explode(',', strtolower($raw)))));
+        $extensions = array_values(array_filter(array_map('trim', explode(',', strtolower($raw)))));
+
+        // An emptied field must not brick uploads. A blank list would reject
+        // every file with "this image type is not allowed", which reads like a
+        // broken uploader rather than a cleared setting; the file picker on the
+        // frontend falls back the same way.
+        return $extensions === [] ? self::DEFAULT_EXTENSIONS : $extensions;
     }
 }

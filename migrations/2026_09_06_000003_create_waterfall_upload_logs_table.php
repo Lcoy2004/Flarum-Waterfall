@@ -16,6 +16,13 @@ return Migration::createTable(
     'waterfall_upload_logs',
     function (Blueprint $table) {
         $table->increments('id');
+        // Deliberately not foreign keys. A transfer is an event, not state:
+        // the row records what was sent to the image host, so it has to outlive
+        // the image (and the uploader) it names — deleting either must not
+        // erase the audit trail. Two consequences are intended rather than
+        // broken: an id here can stop resolving, and the table is bounded by
+        // age instead of by cascades (ProcessImageUploadJob prunes rows older
+        // than three days). The admin log panel is the only reader.
         $table->unsignedInteger('image_id')->nullable();
         $table->unsignedInteger('user_id')->nullable();
         // pending | deferred | success | failed

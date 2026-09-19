@@ -31,6 +31,9 @@ class WaterfallImage extends AbstractModel
     protected $guarded = [];
 
     protected $casts = [
+        // Compared with `===` against the actor's id (the delete policy, the
+        // owner-only error text), so it must not arrive as a string.
+        'user_id' => 'integer',
         'set_id' => 'integer',
         'position' => 'integer',
         'likes_count' => 'integer',

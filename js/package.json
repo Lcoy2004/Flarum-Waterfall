@@ -17,8 +17,8 @@
     "scripts": {
         "dev": "webpack --mode development --watch",
         "build": "webpack --mode production",
-        "format": "prettier --write src",
-        "format-check": "prettier --check src",
+        "format": "prettier --write src tests",
+        "format-check": "prettier --check src tests",
         "clean-typings": "npx rimraf dist-typings && mkdir dist-typings",
         "build-typings": "yarn run clean-typings && tsc && yarn run post-build-typings",
         "post-build-typings": "find dist-typings -type f -name '*.d.ts' -print0 | xargs -0 sed -i 's,../src/@types,@types,g'",

@@ -79,6 +79,36 @@ jobs:
       - name: Check out the source
         uses: actions/checkout@v4
 
+      # The frontend toolchain reads Flarum core's JS out of the Composer tree:
+      # `@flarum/jest-config` resolves `<repo>/vendor/flarum/core/js` and
+      # js/tsconfig.json maps `flarum/*` onto its `dist-typings`. Neither
+      # exists on a bare checkout — a working copy under a site's `vendor/`
+      # hides this, because there core happens to sit three levels up.
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          # Only what composer needs to satisfy core's platform requirements;
+          # nothing here runs PHP.
+          extensions: bcmath, curl, dom, exif, fileinfo, gd, iconv, intl, mbstring, openssl, pdo_mysql, pdo_sqlite, simplexml, sqlite3, xml, xmlreader, xmlwriter, zip
+          coverage: none
+
+      - name: Install the Composer dependencies
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      # Flarum compiles these at runtime, with core's variables already in
+      # scope, so `lessc less/forum.less` alone would not resolve `@phone`.
+      # Without this step a typo here reaches the site as a broken stylesheet
+      # and nothing between the editor and production says a word about it.
+      # The entry file stands in for the compiler's own preamble.
+      - name: Compile the stylesheets
+        run: |
+          for file in less/forum.less less/admin.less; do
+            printf '@import "%s/vendor/flarum/core/less/common/variables.less";\n@import "%s/%s";\n' "$PWD" "$PWD" "$file" > /tmp/waterfall-less-entry.less
+            vendor/bin/lessc /tmp/waterfall-less-entry.less /dev/null
+            echo "compiled $file"
+          done
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:

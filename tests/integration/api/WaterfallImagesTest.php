@@ -12,6 +12,7 @@
 namespace Lcoy\Waterfall\Tests\integration\api;
 
 use Carbon\Carbon;
+use Flarum\Group\Group;
 use Flarum\Testing\integration\RetrievesAuthorizedUsers;
 use Flarum\Testing\integration\TestCase;
 use Flarum\User\User;
@@ -35,7 +36,16 @@ class WaterfallImagesTest extends TestCase
         $this->prepareDatabase([
             User::class => [
                 $this->normalUser(),
-                ['id' => 3, 'username' => 'moderator', 'email' => 'moderator@machine.local', 'is_email_confirmed' => 1],
+                // Both are plain members. User 3 used to be called
+                // "moderator" without being in the group, which is how the
+                // moderate branch below went untested for so long.
+                ['id' => 3, 'username' => 'other', 'email' => 'other@machine.local', 'is_email_confirmed' => 1],
+                ['id' => 4, 'username' => 'mod', 'email' => 'mod@machine.local', 'is_email_confirmed' => 1],
+            ],
+            // Group 4 is Flarum's moderators group; the extension's permission
+            // migration grants lcoy-waterfall.moderate to it.
+            'group_user' => [
+                ['user_id' => 4, 'group_id' => Group::MODERATOR_ID],
             ],
             WaterfallImage::class => [
                 ['id' => 1, 'user_id' => 2, 'src' => '/file/a.png', 'thumb' => null, 'title' => 'Oldest', 'likes_count' => 0, 'views_count' => 0, 'score' => 0.1, 'status' => 'published', 'created_at' => $now->copy()->subDays(3), 'updated_at' => $now],
@@ -264,10 +274,42 @@ class WaterfallImagesTest extends TestCase
     }
 
     /**
+     * The other half of the same policy: lcoy-waterfall.moderate is what the
+     * "delete any" ability is actually for, and nothing exercised it.
+     */
+    #[Test]
+    public function moderator_can_delete_another_users_image()
+    {
+        $response = $this->send(
+            $this->request('DELETE', '/api/waterfall-images/3', ['authenticatedAs' => 4])
+        );
+
+        $this->assertEquals(204, $response->getStatusCode());
+        $this->assertNull(WaterfallImage::find(3));
+    }
+
+    /**
+     * Only a published image is counted: a card still being processed has no
+     * public view to report, and the counter feeds the recommendation score.
+     */
+    #[Test]
+    public function view_of_an_unpublished_image_is_not_counted()
+    {
+        // Image 4 is the uploader's own pending one, so it is visible to them
+        // and the request reaches the counting branch rather than a 404.
+        $this->send(
+            $this->request('POST', '/api/waterfall-images/4/view', ['authenticatedAs' => 2])
+        );
+
+        $this->assertEquals(0, WaterfallImage::query()->find(4)->views_count);
+    }
+
+    /**
      * Deleting an image has to leave its set's denormalised counters and cover
-     * in step with the rows that are left; the feed reads those columns
-     * without joining the images table, and the offset it pages through comes
-     * from images_count.
+     * in step with the rows that are left: the feed reads those columns without
+     * joining the images table. This said the feed's pagination offset came
+     * from images_count, which was never true — that offset counts sets
+     * (WaterfallState.offset), and images_count is display-only.
      */
     #[Test]
     public function deleting_an_image_refreshes_its_set_aggregates()
@@ -304,5 +346,44 @@ class WaterfallImagesTest extends TestCase
 
         $this->assertEquals(204, $response->getStatusCode());
         $this->assertNull(WaterfallSet::find(20));
+    }
+
+    /**
+     * images_count is the set's *public* count. The card badge that reads it is
+     * shown to visitors, who can only open the published images, so a failed or
+     * still-processing one must not be added to it — cover_image_id and status
+     * are already picked from that same subset.
+     */
+    #[Test]
+    public function set_aggregates_count_only_published_images()
+    {
+        $now = Carbon::now();
+
+        $this->prepareDatabase([
+            WaterfallSet::class => [
+                ['id' => 20, 'user_id' => 2, 'title' => 'One of two', 'cover_image_id' => 30, 'images_count' => 2, 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+            ],
+            WaterfallImage::class => [
+                ['id' => 30, 'user_id' => 2, 'set_id' => 20, 'position' => 0, 'src' => '/file/s1.png', 'thumb' => null, 'title' => 'Published', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+                ['id' => 31, 'user_id' => 2, 'set_id' => 20, 'position' => 1, 'src' => '', 'thumb' => null, 'title' => 'Failed', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'failed', 'error' => 'boom', 'created_at' => $now, 'updated_at' => $now],
+            ],
+        ]);
+
+        // Deleting the published image forces a recomputation with only the
+        // failed one left.
+        $response = $this->send(
+            $this->request('DELETE', '/api/waterfall-images/30', ['authenticatedAs' => 2])
+        );
+
+        $this->assertEquals(204, $response->getStatusCode());
+
+        $set = WaterfallSet::find(20);
+
+        // Zero, not one: the failed image is not part of the public count. The
+        // set itself survives — it still holds a row, and the card has to tell
+        // its uploader that the transfer failed rather than disappear.
+        $this->assertEquals(0, $set->images_count);
+        $this->assertNull($set->cover_image_id);
+        $this->assertEquals(WaterfallSet::STATUS_FAILED, $set->status);
     }
 }

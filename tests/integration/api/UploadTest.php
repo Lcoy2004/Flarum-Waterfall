@@ -12,10 +12,12 @@
 namespace Lcoy\Waterfall\Tests\integration\api;
 
 use Carbon\Carbon;
+use Flarum\Group\Group;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Testing\integration\RetrievesAuthorizedUsers;
 use Flarum\Testing\integration\TestCase;
 use Flarum\User\User;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallSet;
 use Lcoy\Waterfall\Model\WaterfallUploadLog;
@@ -36,6 +38,16 @@ class UploadTest extends TestCase
      */
     protected const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
+    /**
+     * Minimal 1x1 JPEG, for the card copy. The browser emits WebP or JPEG for
+     * it, and both are accepted where an upload's own format is not (a site
+     * that allows only PNG uploads still gets card copies).
+     */
+    protected const JPEG_1X1 = '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
+
+    /** @var string[] staged files this test created, removed in tearDown. */
+    protected array $tempFiles = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -47,6 +59,20 @@ class UploadTest extends TestCase
                 $this->normalUser(),
             ],
         ]);
+    }
+
+    protected function tearDown(): void
+    {
+        // The harness rolls the database back but knows nothing about the
+        // filesystem; without this every test that stages a file would leave
+        // it in the system temp dir.
+        foreach ($this->tempFiles as $file) {
+            @unlink($file);
+        }
+
+        $this->tempFiles = [];
+
+        parent::tearDown();
     }
 
     #[Test]
@@ -118,8 +144,7 @@ class UploadTest extends TestCase
 
         // A plain text file masquerading as image/png in client metadata:
         // the magic-byte sniffing must reject it.
-        $tmp = tempnam(sys_get_temp_dir(), 'wf-test').'.png';
-        file_put_contents($tmp, 'this is definitely not an image');
+        $tmp = $this->writeTempFile('this is definitely not an image', 'png');
 
         $response = $this->send(
             $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
@@ -127,6 +152,155 @@ class UploadTest extends TestCase
         );
 
         $this->assertEquals(422, $response->getStatusCode());
+    }
+
+    #[Test]
+    public function upload_still_works_when_the_mime_whitelist_is_emptied()
+    {
+        // Clearing the admin field must not reject every file with "this image
+        // type is not allowed": that reads like a broken uploader rather than a
+        // cleared setting, and it is a state an admin reaches by accident.
+        $this->settings['lcoy-waterfall.mime_whitelist'] = '';
+
+        $container = $this->app()->getContainer();
+
+        $container->instance(ExternalImageHostUploader::class, $this->mockUploader('/file/mock-upload.png'));
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                ->withUploadedFiles(['file' => $this->pngUpload()])
+                ->withParsedBody(['title' => 'Blank whitelist'])
+        );
+
+        $this->assertEquals(201, $response->getStatusCode());
+        $this->assertEquals('published', json_decode($response->getBody(), true)['data']['attributes']['status']);
+    }
+
+    /**
+     * The site-wide per-minute quota is what bounds how often the image host is
+     * called. Running out of it must fail the upload rather than leave it
+     * pending: a pending row is what the uploader's concurrency allowance
+     * counts, so a job that quietly ended would lock them out of uploading
+     * until they deleted the card by hand.
+     */
+    #[Test]
+    public function an_exhausted_transfer_quota_fails_the_upload_instead_of_leaving_it_pending()
+    {
+        $this->settings['lcoy-waterfall.global_per_minute_limit'] = 1;
+
+        $container = $this->app()->getContainer();
+
+        // Fill the minute's bucket instead of spending it with a first upload:
+        // that keeps the test independent of whatever an earlier test left in a
+        // shared cache store.
+        $cache = $container->make(CacheRepository::class);
+        $key = 'lcoy-waterfall.transfers.'.date('YmdHi');
+
+        $cache->forget($key);
+        $cache->add($key, 99, 120);
+
+        $container->instance(ExternalImageHostUploader::class, $this->mockUploader('/file/mock-upload.png'));
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                ->withUploadedFiles(['file' => $this->pngUpload()])
+                ->withParsedBody(['title' => 'Over quota'])
+        );
+
+        // The resource is created; it is the transfer that could not run.
+        $this->assertEquals(201, $response->getStatusCode());
+
+        $body = json_decode($response->getBody(), true);
+
+        // The job runs on the sync driver here, which cannot release itself
+        // back onto a queue — the case canBeDeferred() exists for. It has to
+        // end in a definitive failure instead.
+        $this->assertEquals('failed', $body['data']['attributes']['status']);
+
+        $log = WaterfallUploadLog::query()->where('image_id', $body['data']['id'])->first();
+
+        $this->assertEquals(WaterfallUploadLog::STATUS_FAILED, $log->status);
+    }
+
+    #[Test]
+    public function browser_thumbnail_is_transferred_under_its_own_name()
+    {
+        $container = $this->app()->getContainer();
+
+        // What the job actually asks the host to do: the filename of each
+        // transfer, and the budget it was given.
+        $transfers = [];
+
+        $container->instance(
+            ExternalImageHostUploader::class,
+            $this->scriptedUploader(
+                ['/file/orig.png', '/file/card.jpeg'],
+                function (string $filename, ?int $budget) use (&$transfers): void {
+                    $transfers[] = [$filename, $budget];
+                }
+            )
+        );
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                ->withUploadedFiles(['file' => $this->pngUpload(), 'thumb' => $this->jpegThumbUpload()])
+                ->withParsedBody(['title' => 'With a card copy'])
+        );
+
+        $this->assertEquals(201, $response->getStatusCode());
+
+        $attributes = json_decode($response->getBody(), true)['data']['attributes'];
+
+        $this->assertEquals('/file/orig.png', $attributes['src']);
+        // The host's second answer, not the full-size src it would fall back
+        // to if the browser's copy had never been sent.
+        $this->assertEquals('/file/card.jpeg', $attributes['thumb']);
+
+        $this->assertCount(2, $transfers);
+
+        // Only the extension travels: the uploader's own filename would put
+        // raw UTF-8 (or a quote) inside the multipart header, which the site's
+        // WAF reads as a malformed packet.
+        $this->assertEquals('image.png', $transfers[0][0]);
+        // The copy is named for what it is, so the host keeps the browser's
+        // WebP/JPEG instead of re-encoding the original's format.
+        $this->assertEquals('thumb.jpeg', $transfers[1][0]);
+
+        // Both transfers carry a budget: that is what keeps the delivery
+        // inside the queue's retry_after and stops a second worker from
+        // uploading the same bytes again.
+        $this->assertNotNull($transfers[0][1]);
+        $this->assertGreaterThan(0, $transfers[0][1]);
+        $this->assertNotNull($transfers[1][1]);
+        $this->assertGreaterThan(0, $transfers[1][1]);
+    }
+
+    #[Test]
+    public function a_failed_thumbnail_transfer_falls_back_to_the_full_image()
+    {
+        $container = $this->app()->getContainer();
+
+        $container->instance(
+            ExternalImageHostUploader::class,
+            $this->scriptedUploader(['/file/orig.png', null])
+        );
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                ->withUploadedFiles(['file' => $this->pngUpload(), 'thumb' => $this->jpegThumbUpload()])
+                ->withParsedBody(['title' => 'Card copy failed'])
+        );
+
+        $this->assertEquals(201, $response->getStatusCode());
+
+        $attributes = json_decode($response->getBody(), true)['data']['attributes'];
+
+        // Losing the card copy costs the card some bytes, never the upload.
+        $this->assertEquals('published', $attributes['status']);
+        $this->assertEquals('/file/orig.png', $attributes['src']);
+        // The mock host offers no thumbnail of its own either, so the chain
+        // lands on the full image.
+        $this->assertEquals('/file/orig.png', $attributes['thumb']);
     }
 
     #[Test]
@@ -366,6 +540,46 @@ class UploadTest extends TestCase
         $this->assertEquals(422, $response->getStatusCode());
     }
 
+    /**
+     * The mirror of the rejection above. This is the branch the moderate
+     * permission exists for, and it had no coverage: the set belongs to
+     * somebody else and the upload is allowed anyway.
+     */
+    #[Test]
+    public function moderator_can_upload_into_another_users_set()
+    {
+        $this->prepareDatabase([
+            User::class => [
+                ['id' => 4, 'username' => 'mod', 'email' => 'mod@machine.local', 'is_email_confirmed' => 1],
+            ],
+            // Group 4 is Flarum's moderators group, and the extension's
+            // permission migration is what grants lcoy-waterfall.moderate to
+            // it — seeding the membership exercises that grant too.
+            'group_user' => [
+                ['user_id' => 4, 'group_id' => Group::MODERATOR_ID],
+            ],
+            WaterfallSet::class => [
+                ['id' => 20, 'user_id' => 2, 'title' => 'Their set', 'images_count' => 0, 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'pending', 'created_at' => Carbon::now(), 'updated_at' => Carbon::now()],
+            ],
+        ]);
+
+        $container = $this->app()->getContainer();
+
+        $container->instance(ExternalImageHostUploader::class, $this->mockUploader('/file/mock-upload.png'));
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 4])
+                ->withUploadedFiles(['file' => $this->pngUpload()])
+                ->withParsedBody(['set_id' => '20', 'position' => '0'])
+        );
+
+        $this->assertEquals(201, $response->getStatusCode());
+
+        $image = WaterfallImage::query()->find(json_decode($response->getBody(), true)['data']['id']);
+
+        $this->assertEquals(20, $image->set_id);
+    }
+
     #[Test]
     public function admin_can_read_upload_log()
     {
@@ -413,7 +627,7 @@ class UploadTest extends TestCase
                 parent::__construct($settings, $logger);
             }
 
-            public function upload(string $filePath, string $filename): UploadResult
+            public function upload(string $filePath, string $filename, ?int $budgetSeconds = null): UploadResult
             {
                 if ($this->mockSrc === null) {
                     throw new UploadException(
@@ -430,11 +644,84 @@ class UploadTest extends TestCase
         };
     }
 
+    /**
+     * An uploader fake that answers one call at a time: each entry in $srcs
+     * answers a transfer, a null entry throws the way an unreachable host
+     * does, and the last entry repeats for any call beyond the script.
+     *
+     * $record receives the filename and budget of every transfer, which is how
+     * a test sees what the job actually asked the host to do.
+     */
+    protected function scriptedUploader(array $srcs, ?callable $record = null): ExternalImageHostUploader
+    {
+        $container = $this->app()->getContainer();
+
+        return new class(
+            $container->make(SettingsRepositoryInterface::class),
+            $container->make(LoggerInterface::class),
+            $srcs,
+            $record
+        ) extends ExternalImageHostUploader {
+            private int $call = 0;
+
+            public function __construct(
+                SettingsRepositoryInterface $settings,
+                LoggerInterface $logger,
+                private readonly array $srcs,
+                private readonly mixed $record
+            ) {
+                parent::__construct($settings, $logger);
+            }
+
+            public function upload(string $filePath, string $filename, ?int $budgetSeconds = null): UploadResult
+            {
+                if ($this->record !== null) {
+                    ($this->record)($filename, $budgetSeconds);
+                }
+
+                $src = $this->srcs[min($this->call, count($this->srcs) - 1)];
+                $this->call++;
+
+                if ($src === null) {
+                    throw new UploadException('image_host_http_error', 'mock image host unavailable', 503, 1, 5);
+                }
+
+                return new UploadResult(src: $src, httpCode: 200, attempts: 1, durationMs: 5);
+            }
+        };
+    }
+
     protected function pngUpload(): UploadedFile
     {
-        $tmp = tempnam(sys_get_temp_dir(), 'wf-test').'.png';
-        file_put_contents($tmp, base64_decode(self::PNG_1X1));
+        $path = $this->writeTempFile(base64_decode(self::PNG_1X1), 'png');
 
-        return new UploadedFile($tmp, filesize($tmp), UPLOAD_ERR_OK, 'test.png', 'image/png');
+        return new UploadedFile($path, filesize($path), UPLOAD_ERR_OK, 'test.png', 'image/png');
+    }
+
+    protected function jpegThumbUpload(): UploadedFile
+    {
+        $path = $this->writeTempFile(base64_decode(self::JPEG_1X1), 'jpg');
+
+        return new UploadedFile($path, filesize($path), UPLOAD_ERR_OK, 'thumb.jpg', 'image/jpeg');
+    }
+
+    /**
+     * Write $contents to a tracked temp file with the given extension.
+     *
+     * tempnam() creates the file it names, so the path is renamed rather than
+     * suffixed: that keeps the extension the MIME sniffing needs without
+     * leaving an empty leftover behind on every call.
+     */
+    protected function writeTempFile(string $contents, string $suffix): string
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'wf-test');
+        $path = $tmp.'.'.$suffix;
+
+        rename($tmp, $path);
+        file_put_contents($path, $contents);
+
+        $this->tempFiles[] = $path;
+
+        return $path;
     }
 }

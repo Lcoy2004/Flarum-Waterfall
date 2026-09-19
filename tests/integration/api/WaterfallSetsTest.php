@@ -302,4 +302,29 @@ class WaterfallSetsTest extends TestCase
         $this->assertEquals(403, $response->getStatusCode());
         $this->assertNotNull(WaterfallSet::find(1));
     }
+
+    /**
+     * The view endpoint is the only writer of views_count, and the only place
+     * the set's own counter moves by a delta inside a locked transaction
+     * (recordView) — the feed and the recommendation score both read those
+     * numbers, and nothing covered the path.
+     */
+    #[Test]
+    public function a_view_is_counted_once_and_moves_its_set_with_it()
+    {
+        // Sent as a signed-in user: the harness authenticates through an
+        // access token, which is what a session-less request needs. In the
+        // browser the same call goes out for guests too, carrying the CSRF
+        // token from the page payload.
+        $response = $this->send($this->request('POST', '/api/waterfall-images/2/view', ['authenticatedAs' => 2]));
+
+        $this->assertEquals(200, $response->getStatusCode());
+
+        // Throttled to one counted view per IP per image per minute.
+        $this->send($this->request('POST', '/api/waterfall-images/2/view', ['authenticatedAs' => 2]));
+
+        // Fixtures: image 2 sits in set 1 with 5 views, and the set has 10.
+        $this->assertEquals(6, WaterfallImage::query()->find(2)->views_count);
+        $this->assertEquals(11, WaterfallSet::query()->find(1)->views_count);
+    }
 }

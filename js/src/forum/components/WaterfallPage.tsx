@@ -35,6 +35,19 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
   protected openSetLoadedCount = 0;
   protected loadingMoreImages = false;
 
+  // Set once a page shorter than IMAGES_PAGE came back: page size is the
+  // server's, so a short page is the set's last one. This is the honest end
+  // marker because, unlike imagesCount, it is derived from what the endpoint
+  // actually delivered to this visitor.
+  protected openSetExhausted = false;
+
+  // Bumped by every open/close of the lightbox; async responses carry the
+  // epoch they were started under and are dropped once a newer one exists.
+  // Without it, opening set B while set A's request is still in flight lets
+  // A's slower response write A's images into B's lightbox, and A's failure
+  // close the lightbox B just opened.
+  protected lightboxEpoch = 0;
+
   /** Page size for lightbox image pagination (must match the server cap). */
   protected static readonly IMAGES_PAGE = 50;
 
@@ -70,12 +83,20 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
   hero() {
     const canUpload = app.forum.attribute<boolean | undefined>('waterfallCanUpload');
     const isLogged = !!app.session.user;
+    // Admin-editable intro, blank until the admin writes one; trimming means a
+    // value of only spaces (an accidental save) counts as blank too, so the
+    // element and its margin never render empty.
+    const description = (app.forum.attribute<string | undefined>('waterfallDescription') ?? '').trim();
 
     return (
-      <div className="WaterfallPage-hero">
-        <div className="WaterfallPage-heroText">
-          <h2 className="WaterfallPage-title">{app.translator.trans('lcoy-waterfall.forum.page.title')}</h2>
-
+      // `.container` is what lines the header up: Flarum styles the hero band
+      // itself as full-bleed and gives only the page container the capped,
+      // centred width and 15px side padding, so without it the title, the
+      // tabs and the button sat against the viewport edges while the sidebar
+      // and the feed below stayed inset. Core's own Hero wraps its content the
+      // same way.
+      <div className="container WaterfallPage-hero">
+        <div className="WaterfallPage-heroTop">
           <div className="WaterfallPage-tabs" role="tablist" aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.page.title'))}>
             {(['latest', 'recommended'] as WaterfallSort[]).map((sort) => (
               <button
@@ -92,20 +113,27 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
               </button>
             ))}
           </div>
+
+          <h2 className="WaterfallPage-title">{app.translator.trans('lcoy-waterfall.forum.page.title')}</h2>
+
+          {isLogged && (
+            <Button
+              className="Button Button--primary WaterfallPage-uploadButton"
+              icon="fas fa-cloud-upload-alt"
+              disabled={!canUpload}
+              onclick={() => {
+                app.modal.show(() => import('./WaterfallUploadModal'), { waterfallState: this.state });
+              }}
+            >
+              {app.translator.trans('lcoy-waterfall.forum.upload_button')}
+            </Button>
+          )}
         </div>
 
-        {isLogged && (
-          <Button
-            className="Button Button--primary WaterfallPage-uploadButton"
-            icon="fas fa-cloud-upload-alt"
-            disabled={!canUpload}
-            onclick={() => {
-              app.modal.show(() => import('./WaterfallUploadModal'), { waterfallState: this.state });
-            }}
-          >
-            {app.translator.trans('lcoy-waterfall.forum.upload_button')}
-          </Button>
-        )}
+        {/* Sits below the whole title row rather than inside its centre cell:
+            a long intro then wraps against the container's width instead of
+            stretching the grid's middle column and squeezing the tabs. */}
+        {!!description && <p className="WaterfallPage-description">{description}</p>}
       </div>
     );
   }
@@ -126,6 +154,11 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
             onNearEnd={() => this.loadMoreImages()}
             onDelete={(image: WaterfallImage) => this.removeImage(image)}
             onClose={() => {
+              // Invalidate anything still in flight and drop the paging state
+              // the closed lightbox owned.
+              this.lightboxEpoch++;
+              this.loadingMoreImages = false;
+              this.openSetExhausted = false;
               this.openSet = null;
               this.openSetImages = [];
               this.openSetLoadedCount = 0;
@@ -151,14 +184,28 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
    * user navigates.
    */
   protected openLightbox(set: WaterfallSet): void {
+    // Claim the lightbox for this open; any response still in flight from a
+    // previous open/close carries an older epoch and is discarded below.
+    const epoch = ++this.lightboxEpoch;
+
+    // `===`, deliberately not `>=`: the count is the set's published images
+    // while the uploader's own in-memory list is longer (it also holds their
+    // failed ones). Reading that as "complete" would skip the refetch and, for
+    // a set past the include cap, leave the uploader's own images unreachable
+    // behind a shortcut. One redundant refetch is the safe side of that trade.
+    const loaded = this.setImages(set);
+    const complete = loaded.length > 0 && loaded.length === set.imagesCount();
+
     this.openSet = set;
     this.openSetIndex = 0;
     this.openSetLoading = true;
     this.openSetImages = [];
     this.openSetLoadedCount = 0;
-
-    const loaded = this.setImages(set);
-    const complete = loaded.length > 0 && loaded.length === set.imagesCount();
+    // A run from the previous set must not lock this set's paging: its final
+    // callback is dropped by the epoch check, so nothing else would clear it.
+    this.loadingMoreImages = false;
+    // An already-complete in-memory list needs no page request at all.
+    this.openSetExhausted = complete;
 
     const initial = complete
       ? Promise.resolve(loaded)
@@ -166,10 +213,20 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
 
     initial
       .then((images) => {
+        if (epoch !== this.lightboxEpoch) {
+          return;
+        }
+
         this.openSetImages = images.slice();
         this.openSetLoadedCount = images.length;
       })
       .catch((error: unknown) => {
+        // A failure of a set the user has already navigated away from must not
+        // clear the lightbox the newer open is showing.
+        if (epoch !== this.lightboxEpoch) {
+          return;
+        }
+
         this.openSet = null;
 
         const alert = (error as { alert?: AlertAttrs | null } | null)?.alert;
@@ -181,6 +238,10 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
         }
       })
       .then(() => {
+        if (epoch !== this.lightboxEpoch) {
+          return;
+        }
+
         this.openSetLoading = false;
         m.redraw();
       });
@@ -211,6 +272,9 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
     this.openSetIndex = Math.min(this.openSetIndex, Math.max(0, this.openSetImages.length - 1));
 
     if (this.openSetImages.length === 0) {
+      // The lightbox is going away without onClose(), so invalidate the
+      // in-flight page requests here too.
+      this.lightboxEpoch++;
       this.openSet = null;
       this.openSetLoadedCount = 0;
 
@@ -218,9 +282,14 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
         this.state.removeSet(set);
       }
     } else if (set) {
-      // Keep the card's count in step; the server has already recomputed
-      // the authoritative aggregates.
-      set.pushAttributes({ imagesCount: Math.max(0, set.imagesCount() - 1) });
+      // Keep the card's count in step; the server has already recomputed the
+      // authoritative aggregates. The count is published-only, so deleting a
+      // failed or still-processing image must leave it alone — decrementing
+      // regardless would show a number the server would not agree with until
+      // the feed was reloaded.
+      if (image.status() === 'published') {
+        set.pushAttributes({ imagesCount: Math.max(0, set.imagesCount() - 1) });
+      }
     }
 
     m.redraw();
@@ -233,8 +302,20 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
    */
   protected loadMoreImages(): void {
     const set = this.openSet;
+    // Bind the response to the open that started it: without this, a page
+    // fetched for a set the user has since left (or closed) is concatenated
+    // onto whatever set is open now.
+    const epoch = this.lightboxEpoch;
 
-    if (!set || this.loadingMoreImages || this.openSetImages.length === 0 || this.openSetLoadedCount >= set.imagesCount()) {
+    // `imagesCount` is the set's *published* images, while this endpoint hands
+    // back whatever the viewer may see — the uploader's own list also carries
+    // their failed and processing ones, so their two numbers do not line up.
+    // The comparison is therefore only a cheap shortcut, and the real
+    // terminator is the short page further down, which depends on nothing but
+    // what the endpoint actually returned. It has to be: a guard that can never
+    // be satisfied would leave every redraw asking for another page, and the
+    // empty page would leave the count exactly where it started.
+    if (!set || this.loadingMoreImages || this.openSetExhausted || this.openSetImages.length === 0 || this.openSetLoadedCount >= set.imagesCount()) {
       return;
     }
 
@@ -248,6 +329,17 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
         include: 'user,likes',
       })
       .then((images) => {
+        if (epoch !== this.lightboxEpoch) {
+          return;
+        }
+
+        // A page shorter than the limit is the last one — the endpoint caps at
+        // IMAGES_PAGE, and it delivers by visibility, so this is the honest
+        // end marker for every viewer.
+        if (images.length < WaterfallPage.IMAGES_PAGE) {
+          this.openSetExhausted = true;
+        }
+
         // Skip ids already present: a fresh upload can shift positions while
         // the lightbox is open.
         const existing = new Set(this.openSetImages.map((image) => image.id()));
@@ -258,6 +350,13 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
       })
       .catch(() => {})
       .then(() => {
+        // A superseded response must not clear the in-flight marker of the
+        // request that owns the lightbox now; openLightbox()/onClose() reset
+        // the marker for the run they start, so it can never stay stuck.
+        if (epoch !== this.lightboxEpoch) {
+          return;
+        }
+
         this.loadingMoreImages = false;
         m.redraw();
       });

@@ -22,42 +22,87 @@
 // -- Page -------------------------------------------------------------------
 
 .WaterfallPage {
+  // The header band carries `.container` (added in the component), which is
+  // what gives it the same capped, centred width and 15px side padding as the
+  // page container below — hence the vertical-only padding here: a shorthand
+  // `padding` would reset the container's horizontal inset and put the header
+  // back against the viewport edges.
   &-hero {
-    display: flex;
-    align-items: flex-end;
-    // Wraps on its own instead of switching layout at a breakpoint: while the
-    // text and the button fit side by side they share a row, and the button
-    // drops onto its own row when they no longer do.
-    flex-wrap: wrap;
-    gap: 16px;
-    padding: 12px 0 4px;
+    // `.container` supplies the horizontal inset (see below), so only vertical
+    // rhythm lives here.
+    padding-top: 22px;
+    padding-bottom: 18px;
+    // A hairline closes the header off from the feed. A control-bg line would
+    // disappear in dark themes (only a few percent apart from body-bg), so
+    // this is the translucent muted one the modal fields already use.
+    border-bottom: 1px solid color-mix(in srgb, var(--muted-color) 25%, transparent);
   }
 
-  &-heroText {
-    // Grows into the space the button leaves behind; the intrinsic basis is
-    // what makes the wrap happen at the right width without a media query.
-    flex: 1 1 260px;
-    min-width: 0;
+  // Three-column grid: tabs left, title dead-centre, button right. The side
+  // columns are equal (1fr each), so the title sits on the page's centre axis
+  // no matter how wide the tabs or the button grow, and the row reads
+  // symmetric — each side carries one control of comparable weight.
+  &-heroTop {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 0 16px;
+
+    @media @phone {
+      // Narrow screens can't hold all three on one row: the grid collapses to
+      // a block, the button pins to the right of the title row (which the
+      // block's text-align centres), and the tabs drop to a centred row of
+      // their own below via their own margin.
+      display: block;
+      position: relative;
+      text-align: center;
+    }
   }
 
   &-title {
     margin: 0;
-    font-size: 24px;
+    // Steps up with the viewport: a page-level header may answer to the screen
+    // (unlike the card chrome, which answers to its own container width).
+    font-size: ~"clamp(24px, 2.4vw, 30px)";
     font-weight: 700;
   }
 
+  // Admin-written intro under the title row. Centred on the same axis as the
+  // title, but capped: prose set to the full container width is hard to read,
+  // and the cap is what keeps a long intro a paragraph instead of a band.
+  &-description {
+    max-width: 46em;
+    margin: 12px auto 0;
+    text-align: center;
+    color: var(--muted-color);
+    font-size: 15px;
+    line-height: 1.65;
+    // The admin types this into a textarea, where a newline is a deliberate
+    // paragraph break; without this the browser would collapse them all.
+    white-space: pre-line;
+  }
+
   &-tabs {
-    display: inline-flex;
-    // A segmented control wants to stay one row; on very narrow screens it
-    // scrolls instead of wrapping into a broken second segment.
+    // Left cell of the hero grid. fit-content shrinks the track to the
+    // segments so the 1fr column doesn't stretch it; a segmented control
+    // stays one row and scrolls on very narrow screens instead of wrapping
+    // into a broken second segment.
+    justify-self: start;
+    display: flex;
+    width: fit-content;
     max-width: 100%;
     overflow-x: auto;
-    margin-top: 10px;
     border: 1px solid var(--control-bg);
     // The track fill turns the outline into a finished segmented control:
     // resting segments sit on control-bg, the active one lifts off it.
     background: var(--control-bg);
     border-radius: var(--border-radius);
+
+    @media @phone {
+      // The block fallback centres block-level children through auto margins.
+      justify-self: center;
+      margin: 14px auto 0;
+    }
   }
 
   &-tab {
@@ -90,22 +135,39 @@
   }
 
   &-uploadButton {
-    // Floating action button (top-right of the page header). `margin-left:
-    // auto` keeps it right-aligned both beside the text and on its own row
-    // after the hero wraps.
-    margin-left: auto;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    // Right cell of the hero grid. Sized up from a default Button and given a
+    // floating shadow so it draws the eye as the page's primary action.
+    justify-self: end;
+    padding: 9px 22px;
+    font-size: 15px;
     white-space: nowrap;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
     transition: transform 150ms ease, box-shadow 150ms ease;
 
     &:hover {
       transform: translateY(-1px);
-      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+      box-shadow: 0 9px 24px rgba(0, 0, 0, 0.26);
     }
 
     &:active {
       transform: translateY(0);
-      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
+    }
+
+    @media @phone {
+      // The block fallback pins the button over the centred title row.
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+
+      &:hover {
+        transform: translateY(calc(-50% - 1px));
+      }
+
+      &:active {
+        transform: translateY(-50%);
+      }
     }
   }
 
@@ -1199,7 +1261,10 @@
 // card), so nothing here needs to know about screen sizes. What remains is a
 // genuine content decision: on a narrow screen the lightbox toolbar keeps only
 // what fits, dropping the secondary metadata rather than wrapping it.
-@media (max-width: 767px) {
+// `@phone` rather than a hand-written 767px: it is the same breakpoint the
+// rest of this file (and core) uses, and core's real value is 767.98px — a
+// literal 767px would leave a sliver of widths on either side of the two.
+@media @phone {
   .WaterfallLightbox-toolbarActions {
     .WaterfallLightbox-time,
     .WaterfallLightbox-likers,

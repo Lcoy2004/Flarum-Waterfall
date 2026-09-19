@@ -171,21 +171,53 @@ class UploadImageEndpoint extends Endpoint
                     }
                 }
 
-                try {
-                    $image = new WaterfallImage();
-                    $image->user_id = $actor->id;
-                    $image->set_id = $set?->id;
-                    $image->position = $position;
-                    $image->src = '';
-                    $image->thumb = null;
-                    $image->title = $title !== '' ? $title : null;
-                    $image->status = WaterfallImage::STATUS_PENDING;
+                // The row and the set's counters are written in one
+                // transaction: half of that pair is a pending row that no job
+                // will ever pick up, and a pending row is exactly what the
+                // per-user concurrency limit counts — it would hold one of the
+                // uploader's slots until they deleted the card by hand.
+                $image = new WaterfallImage();
+                $image->user_id = $actor->id;
+                $image->set_id = $set?->id;
+                $image->position = $position;
+                $image->src = '';
+                $image->thumb = null;
+                $image->title = $title !== '' ? $title : null;
+                $image->status = WaterfallImage::STATUS_PENDING;
+
+                $image->getConnection()->transaction(function () use ($image, $actor, $rateLimiter) {
+                    // The uploader's own row is the lock the two limits below
+                    // need: each is a count read and acted on, so two parallel
+                    // requests could both find room for one more and then both
+                    // insert. Locking per user blocks nobody else, and the
+                    // client sends one upload at a time anyway.
+                    User::query()->whereKey($actor->id)->lockForUpdate()->first();
+
+                    // The check further up fails fast, before any file is
+                    // staged; this pass is the authoritative one, taken where
+                    // the row it authorises cannot be raced.
+                    $rateLimiter->assertUserMayUpload($actor);
+
                     $image->save();
 
-                    // Reflect the new (pending) image in the set's counters
-                    // straight away so the uploader sees the correct count.
+                    // Keep the set's denormalised row in step with the new
+                    // child: the status is what the feed reads to decide
+                    // between a "processing" card and a live one, and a set
+                    // whose images had all failed has to come back to pending
+                    // when another one is on its way. (The public image count
+                    // does not move here — it counts published images, and this
+                    // one has not been transferred yet.)
                     WaterfallSet::syncAggregatesForImage($image);
+                });
 
+                // From the moment the job is queued it owns the staged files
+                // (it deletes them once the transfer is done). Until then they
+                // are still ours, hence the flag: the reload below runs after
+                // the push, and unlinking there would take the spool copy away
+                // from a job that is already on its way to the worker.
+                $pushed = false;
+
+                try {
                     // ProcessImageUploadJob is the single writer of the upload
                     // log (it records the transfer outcome there). It carries
                     // the image id, not the model, so the job always runs and
@@ -206,6 +238,8 @@ class UploadImageEndpoint extends Endpoint
                         $stagedThumbPath
                     ));
 
+                    $pushed = true;
+
                     // The sync queue driver (Flarum's default) runs the job
                     // inline during push(), updating the row directly rather
                     // than this in-memory instance. Reload so the response
@@ -213,8 +247,17 @@ class UploadImageEndpoint extends Endpoint
                     // sync run, still pending under an async driver.
                     $image->refresh();
                 } catch (\Throwable $e) {
-                    // Never leave an orphaned staged file behind when the
-                    // model or the queue write fails.
+                    if ($pushed) {
+                        throw $e;
+                    }
+
+                    // Nothing will ever process this row, so drop it again
+                    // rather than leaving it pending (see the transaction
+                    // above) and counting against the uploader's allowance —
+                    // then free the staged files, which no job received.
+                    $image->delete();
+                    WaterfallSet::syncAggregatesForImage($image);
+
                     @unlink($stagedPath);
 
                     if ($stagedThumbPath !== null) {

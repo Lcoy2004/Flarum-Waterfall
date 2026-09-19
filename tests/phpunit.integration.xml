@@ -9,7 +9,17 @@
     colors="true"
     processIsolation="true"
     stopOnFailure="false"
+    failOnWarning="true"
+    failOnRisky="true"
+    displayDetailsOnTestsThatTriggerDeprecations="true"
 >
+    <!--
+      failOnWarning and failOnRisky are on so that a warning, or a test that
+      asserts nothing, fails the build instead of scrolling past. Deprecations
+      are deliberately not failing: the ones this suite reports come from
+      middlewares/utils — a dependency of Flarum core — on PHP 8.5, which is
+      nothing this extension can fix. They are still displayed.
+    -->
     <testsuites>
         <testsuite name="Flarum Integration Tests">
             <directory suffix="Test.php">./integration</directory>
