@@ -8,9 +8,21 @@ import type { IInternalModalAttrs } from 'flarum/common/components/Modal';
 
 import type WaterfallSet from '../../common/models/WaterfallSet';
 import { MAX_TAGS, MAX_TAG_LENGTH, splitTagDraft } from '../../common/tags';
+import { acceptListForWhitelist } from '../../common/uploadWhitelist';
 import type WaterfallState from '../states/WaterfallState';
 
 type QueueStatus = 'ready' | 'uploading' | 'done' | 'error';
+
+/**
+ * Read once per page: the admin setting cannot change without a reload.
+ * Empty (a hand-cleared setting) means the picker falls back to every image
+ * type; the server still rejects what is not whitelisted.
+ */
+let acceptTypes: string | null = null;
+
+function acceptAttribute(): string {
+  return (acceptTypes ??= acceptListForWhitelist(app.forum.attribute<string | undefined>('waterfallMimeWhitelist') || ''));
+}
 
 interface QueueItem {
   // Stable identity across re-renders and drag reordering (the array index
@@ -217,7 +229,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
           <input
             type="file"
             className="WaterfallUploadModal-fileInput"
-            accept="image/jpeg,image/png,image/gif,image/webp"
+            accept={acceptAttribute()}
             multiple
             onchange={(e: Event) => {
               const input = e.target as HTMLInputElement;

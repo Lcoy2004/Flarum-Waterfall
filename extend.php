@@ -133,12 +133,14 @@ return [
         ->serializeToForum('waterfallShowLikeButton', 'lcoy-waterfall.show_like_button', fn ($value) => (bool) $value)
         ->serializeToForum('waterfallSlideshowImages', 'lcoy-waterfall.slideshow_images', 'intVal')
         ->serializeToForum('waterfallPollInterval', 'lcoy-waterfall.poll_interval', 'intVal')
+        ->serializeToForum('waterfallMimeWhitelist', 'lcoy-waterfall.mime_whitelist')
         ->resetJsCacheFor('lcoy-waterfall.per_page')
         ->resetJsCacheFor('lcoy-waterfall.card_radius')
         ->resetJsCacheFor('lcoy-waterfall.card_gutter')
         ->resetJsCacheFor('lcoy-waterfall.show_like_button')
         ->resetJsCacheFor('lcoy-waterfall.slideshow_images')
-        ->resetJsCacheFor('lcoy-waterfall.poll_interval'),
+        ->resetJsCacheFor('lcoy-waterfall.poll_interval')
+        ->resetJsCacheFor('lcoy-waterfall.mime_whitelist'),
 
     new Extend\Locales(__DIR__.'/locale'),
 ];
