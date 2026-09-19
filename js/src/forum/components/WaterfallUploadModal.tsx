@@ -8,6 +8,7 @@ import type { IInternalModalAttrs } from 'flarum/common/components/Modal';
 
 import type WaterfallSet from '../../common/models/WaterfallSet';
 import { MAX_TAGS, MAX_TAG_LENGTH, splitTagDraft } from '../../common/tags';
+import { uploadExtension } from '../../common/uploadFilename';
 import { acceptListForWhitelist } from '../../common/uploadWhitelist';
 import type WaterfallState from '../states/WaterfallState';
 
@@ -725,7 +726,12 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
     return new Promise((resolve) => {
       const body = new FormData();
 
-      body.append('file', item.file);
+      // Both parts travel under an ASCII-only name: the browser would
+      // otherwise put the file's own name — Chinese, and possibly quoted —
+      // into the multipart header, which the site's WAF can read as a
+      // malformed request and answer by blocking the uploader's IP. Only
+      // the extension is load-bearing (see uploadExtension).
+      body.append('file', item.file, `image.${uploadExtension(item.file.type, item.file.name)}`);
       body.append('title', item.title);
       body.append('set_id', String(set.id()));
       body.append('position', String(this.queue.indexOf(item)));
@@ -734,8 +740,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
       // job forwards it to the image host after the original (see
       // ProcessImageUploadJob::transferThumbnail).
       if (item.thumb) {
-        const ext = item.thumb.type.split('/')[1] || 'webp';
-        body.append('thumb', item.thumb, `thumb.${ext}`);
+        body.append('thumb', item.thumb, `thumb.${uploadExtension(item.thumb.type)}`);
       }
 
       const xhr = new XMLHttpRequest();

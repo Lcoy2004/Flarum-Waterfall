@@ -191,10 +191,18 @@ class UploadImageEndpoint extends Endpoint
                     // the image id, not the model, so the job always runs and
                     // can clean up the staged spool file even if the card is
                     // deleted before the worker picks it up.
+                    //
+                    // The name handed to the image host is built from the
+                    // sniffed extension rather than the client's filename: it
+                    // travels in the outgoing multipart header, so it must not
+                    // carry whatever bytes the uploader chose (a quote or a
+                    // newline would forge that header), and the magic-byte
+                    // extension is the trustworthy one for the served format.
+                    // Only the extension is used — the host renames the file.
                     $queue->push(new ProcessImageUploadJob(
                         $image->id,
                         $stagedPath,
-                        $file->getClientFilename() ?? 'image.'.$extension,
+                        'image.'.$extension,
                         $stagedThumbPath
                     ));
 
