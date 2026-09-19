@@ -54,6 +54,14 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
   oninit(vnode: Mithril.Vnode<CustomAttrs, this>) {
     super.oninit(vnode);
 
+    // The page reuses IndexSidebar, which flarum-tags populates with every
+    // forum tag. In the vertical layout that sidebar renders as a horizontally
+    // scrollable strip above the grid, and a long tag list there is noise on a
+    // page that isn't about tags — the nav keeps its "All Discussions" and
+    // "Tags" links either way. This is the same opt-out flarum's own Messages
+    // page and Tags page use.
+    app.current.set('noTagsList', true);
+
     app.history.push('waterfall', extractText(app.translator.trans('lcoy-waterfall.forum.page.back_to_waterfall_tooltip')));
 
     this.state = new WaterfallState();
