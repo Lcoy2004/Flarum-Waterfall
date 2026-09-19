@@ -48,10 +48,16 @@
 
   &-tabs {
     display: inline-flex;
+    // A segmented control wants to stay one row; on very narrow screens it
+    // scrolls instead of wrapping into a broken second segment.
+    max-width: 100%;
+    overflow-x: auto;
     margin-top: 10px;
     border: 1px solid var(--control-bg);
+    // The track fill turns the outline into a finished segmented control:
+    // resting segments sit on control-bg, the active one lifts off it.
+    background: var(--control-bg);
     border-radius: var(--border-radius);
-    overflow: hidden;
   }
 
   &-tab {
@@ -61,12 +67,15 @@
     color: var(--muted-color);
     padding: 8px 18px;
     font-size: 14px;
+    white-space: nowrap;
     cursor: pointer;
     transition: background-color 150ms ease, color 150ms ease;
 
     &:hover {
+      // A faint wash of the text colour over the control-bg track: visible
+      // in both themes, unlike a control-bg fill which now matches the track.
       color: var(--text-color);
-      background: var(--control-bg);
+      background: color-mix(in srgb, var(--control-color) 8%, transparent);
     }
 
     &.active {
@@ -87,6 +96,17 @@
     margin-left: auto;
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
     white-space: nowrap;
+    transition: transform 150ms ease, box-shadow 150ms ease;
+
+    &:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+    }
+
+    &:active {
+      transform: translateY(0);
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+    }
   }
 
   &-content {
@@ -158,6 +178,9 @@
   display: flex;
   flex-direction: column;
   background: var(--control-bg);
+  // Flarum's own radius token: the chrome (chips, inputs, avatars) is all
+  // rounded, so a sharp-cornered card read as unfinished next to it.
+  border-radius: var(--border-radius);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   overflow: hidden;
   // The card is its own size context: its chrome is tuned by how wide the
@@ -166,12 +189,14 @@
   // e.g. a phone held in landscape, or a desktop window where an extra
   // column fits — which a media query could never track.
   container-type: inline-size;
-  // Pixiv-inspired hover: slight lift + deeper shadow (150ms).
+  // Pixiv-inspired hover: slight lift + deeper, softer shadow (150ms).
   transition: transform 150ms ease, box-shadow 150ms ease;
 
   &:hover {
     transform: translateY(-3px);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+    // A wider, softer blur keeps the lift visible on dark themes, where a
+    // tight black shadow all but disappears against the body background.
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
   }
 
   &-figure {
@@ -216,11 +241,20 @@
     height: 100%;
     object-fit: cover;
     opacity: 0;
-    transition: opacity 480ms ease;
+    // The transform is the hover zoom below; it stays inert on slideshow
+    // frames because the Ken Burns animation's fill-forwards holds the
+    // transform property once it has run.
+    transition: opacity 480ms ease, transform 320ms ease;
 
     &--loaded {
       opacity: 1;
     }
+  }
+
+  // A breath of zoom into the cover on hover rewards the pointer without
+  // costing layout. Slideshow frames are exempt (see above).
+  &:hover &-img--loaded {
+    transform: scale(1.04);
   }
 
   // Slideshow: the frames around the visible one are stacked in the same box
@@ -284,7 +318,8 @@
     }
 
     &--failed {
-      background: #d63838;
+      // The forum's danger token, so the badge tracks the theme's error hue.
+      background: var(--control-danger-color, #d63838);
     }
   }
 
@@ -1172,6 +1207,12 @@
       display: none;
     }
   }
+
+  // Phones navigate by swiping (and the keyboard on tablets); the side arrows
+  // only crowd the image at this width.
+  .WaterfallLightbox-nav {
+    display: none;
+  }
 }
 
 // Respect reduced-motion preferences.
@@ -1179,6 +1220,7 @@
   .WaterfallCard,
   .WaterfallCard-img,
   .WaterfallCard-action,
+  .WaterfallPage-uploadButton,
   .WaterfallLightbox-likerLink .Avatar,
   .WaterfallLightbox-img {
     transition: none;
