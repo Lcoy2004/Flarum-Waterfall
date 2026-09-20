@@ -273,6 +273,14 @@
     background: var(--control-bg);
     cursor: pointer;
     overflow: hidden;
+    // The cover frame is the one thing worth skipping when it is off-screen:
+    // it holds the decoded bitmap (the expensive part to paint), while the
+    // card's own chrome is cheap. `aspect-ratio` above already fixes the box
+    // size from the card's width, so nothing here needs an intrinsic-size
+    // guess and a skipped frame never shifts the layout — and because the
+    // slideshow's IntersectionObserver targets this very element, its box is
+    // always laid out, so the rotation still enrols and drops as it should.
+    content-visibility: auto;
 
     &:focus-visible {
       outline: 2px solid var(--link-color);
@@ -290,10 +298,23 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    // Breathing grey gradient placeholder.
-    background: linear-gradient(100deg, var(--control-bg) 30%, var(--muted-more-color, #999) 50%, var(--control-bg) 70%);
-    background-size: 200% 100%;
-    animation: waterfall-skeleton 1.4s ease-in-out infinite;
+    // A static grey field with a highlight sweeping across it. The sweep is a
+    // pseudo-element moved with `transform` — owned by the compositor —
+    // rather than an animated `background-position`, which repaints the whole
+    // card on every frame; with a screenful of pending cards that is the
+    // difference between a smooth scroll and a stuttering one. `::before`
+    // rather than `::after` keeps the sweep underneath the spinner, which is
+    // a real child element.
+    overflow: hidden;
+    background: var(--control-bg);
+
+    &::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(100deg, transparent 30%, var(--muted-more-color, #999) 50%, transparent 70%);
+      animation: waterfall-skeleton 1.4s ease-in-out infinite;
+    }
   }
 
   &-img {
@@ -346,8 +367,11 @@
     gap: 4px;
     padding: 3px 7px;
     border-radius: 999px;
-    background: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(3px);
+    // A plain translucent fill, deliberately not a backdrop-filter: a blur
+    // here is one composited layer per card, re-blurred on every frame the
+    // grid scrolls — the most expensive property in the whole feed, spent on
+    // a 3px effect that a dark, mostly-uniform photo cannot show anyway.
+    background: rgba(0, 0, 0, 0.55);
     pointer-events: none;
   }
 
@@ -677,12 +701,14 @@
   }
 }
 
+// Sweeps the skeleton's highlight across the frame. A transform is owned by
+// the compositor, unlike a background-position, which repaints every frame.
 @keyframes waterfall-skeleton {
-  0% {
-    background-position: 120% 0;
+  from {
+    transform: translateX(-100%);
   }
-  100% {
-    background-position: -80% 0;
+  to {
+    transform: translateX(100%);
   }
 }
 
@@ -759,6 +785,21 @@
     &.is-loading {
       opacity: 0.3;
     }
+  }
+
+  // The cached card thumbnail standing in for the full-size frame while it
+  // downloads. Absolutely positioned rather than a second flex item, which
+  // would push the real frame aside, and painted after it so it covers the
+  // stale previous image; the spinner is positioned too and comes later in
+  // the DOM, so it still reads on top of both.
+  &-img--thumb {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    // It is a stand-in, not the real arrival: no entrance animation. The
+    // opacity stays untouched — the dimming above belongs to the frame that
+    // is still loading, not to this one.
+    animation: none;
   }
 
   // Centred over the stage while the visible image loads. pointer-events:none
@@ -1319,7 +1360,10 @@
     transition: none;
   }
 
+  // The skeleton's sweep lives on a pseudo-element, whose animation is not
+  // switched off by `animation: none` on its parent — it has to be named too.
   .WaterfallCard-skeleton,
+  .WaterfallCard-skeleton::before,
   .WaterfallCard-img--active,
   .WaterfallCard-dot {
     animation: none;

@@ -124,10 +124,15 @@ export default class WaterfallGrid<CustomAttrs extends WaterfallGridAttrs = Wate
             the stylesheet keeps ownership of the property: an inline `gap`
             could only have been overridden with !important. */}
         <div className="WaterfallGrid-grid" style={{ '--waterfall-gutter': `${cardGutterSetting()}px` } as Record<string, string>}>
-          {sets.map((set) => (
+          {sets.map((set, index) => (
             <WaterfallCard
               key={set.id()}
               set={set}
+              // The first cover is the page's LCP element. `lazy` holds it back
+              // until after layout, which is measurably later than it has to
+              // be; only that one is made eager, so nothing else competes with
+              // the render-blocking stylesheet for priority.
+              eager={index === 0}
               onclick={() => this.attrs.onOpen(set)}
               onDelete={(deleted: WaterfallSet) => state.removeSet(deleted)}
             />

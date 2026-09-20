@@ -31,16 +31,35 @@ export default class WaterfallState {
    * without a reload, so rebuilding the string per request only repeated work.
    *
    * `images` is the slideshow window; it is requested only when the slideshow
-   * is enabled, and the poll needs it too so a freshly uploaded set gets its
-   * slideshow images the moment it publishes.
+   * is enabled. The poll deliberately does not ask for it — it backfills the
+   * sets that actually publish instead (see backfillSlideshows).
    */
   protected readonly feedInclude: string;
 
-  protected pollTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * The `include` the pending poll asks for: the same minus the slideshow
+   * images. A set that is still transferring has no published image to return,
+   * so asking for them costs the server the (windowed) queries that load the
+   * relation, and yields nothing — see refreshPending.
+   */
+  protected readonly pollInclude: string;
+
+  /** Whether the feed loads the slideshow images at all. */
+  protected readonly slideshow: boolean;
+
+  protected pollTimer: ReturnType<typeof setTimeout> | null = null;
   protected pollStartedAt = 0;
+  protected pollTick = 0;
   protected refreshing = false;
   protected pollFailures = 0;
   protected visibilityHandler: (() => void) | null = null;
+
+  /**
+   * Ceiling for the polling backoff (see schedulePoll). Long enough to make a
+   * slow transfer cheap to watch, short enough that a card still resolves
+   * while the reader is looking at the feed.
+   */
+  protected static readonly POLL_MAX_INTERVAL = 30000;
 
   /**
    * Bumped by every load(). Responses carry the epoch they were started
@@ -59,8 +78,12 @@ export default class WaterfallState {
     this.pollInterval = Math.max(2, app.forum.attribute<number>('waterfallPollInterval') || 5) * 1000;
 
     const include = ['user', 'coverImage'];
+    const slideshow = (app.forum.attribute<number>('waterfallSlideshowImages') || 0) >= 2;
 
-    if ((app.forum.attribute<number>('waterfallSlideshowImages') || 0) >= 2) {
+    this.slideshow = slideshow;
+    this.pollInclude = include.join(',');
+
+    if (slideshow) {
       include.push('images');
     }
 
@@ -219,8 +242,48 @@ export default class WaterfallState {
     // the threshold again.
     this.pollFailures = 0;
     this.pollStartedAt = Date.now();
+    this.pollTick = 0;
 
-    this.pollTimer = setInterval(() => {
+    this.schedulePoll();
+
+    if (!this.visibilityHandler) {
+      this.visibilityHandler = () => {
+        if (document.visibilityState === 'visible') {
+          // A fresh check the moment the reader comes back, on top of the
+          // backoff the timer is holding.
+          this.refreshPending();
+        }
+      };
+      document.addEventListener('visibilitychange', this.visibilityHandler);
+    }
+  }
+
+  /**
+   * How long this tick waits before checking: the configured interval,
+   * doubling with every check that still found the set pending, and never
+   * longer than POLL_MAX_INTERVAL.
+   */
+  protected pollDelay(): number {
+    return Math.min(this.pollInterval * 2 ** this.pollTick, WaterfallState.POLL_MAX_INTERVAL);
+  }
+
+  /**
+   * Arm the next status check, waiting longer each time.
+   *
+   * The first check comes at the configured interval — a card that finished
+   * transferring seconds ago should resolve right away — and every check that
+   * still finds the set pending doubles the wait up to POLL_MAX_INTERVAL. A
+   * set that takes minutes to transfer used to keep one request every few
+   * seconds for the whole timeout window, each one a full API boot on the
+   * server; the same window now costs a handful of requests, and the card
+   * still updates while the reader is on the page.
+   */
+  protected schedulePoll(): void {
+    const delay = this.pollDelay();
+
+    this.pollTick += 1;
+
+    this.pollTimer = setTimeout(() => {
       if (Date.now() - this.pollStartedAt > WaterfallState.POLL_TIMEOUT) {
         // A no-op when nothing is still pending; either way the poll is over.
         this.failStalePending();
@@ -229,25 +292,19 @@ export default class WaterfallState {
         return;
       }
 
-      // refreshPending() stops the poll by itself once nothing is pending, so
-      // the pending list is filtered in exactly one place per tick instead of
-      // once to check and again to fetch.
       this.refreshPending();
-    }, this.pollInterval);
 
-    if (!this.visibilityHandler) {
-      this.visibilityHandler = () => {
-        if (document.visibilityState === 'visible') {
-          this.refreshPending();
-        }
-      };
-      document.addEventListener('visibilitychange', this.visibilityHandler);
-    }
+      // refreshPending() stops the poll by itself once nothing is pending —
+      // it nulls the timer — so the chain only continues when it did not.
+      if (this.pollTimer !== null) {
+        this.schedulePoll();
+      }
+    }, delay);
   }
 
   stopPolling(): void {
     if (this.pollTimer) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
 
@@ -284,12 +341,19 @@ export default class WaterfallState {
     this.refreshing = true;
 
     app.store
-      .find<WaterfallSet[]>('waterfall-sets', ids, { include: this.feedInclude })
+      // Without the slideshow include: while a set is pending there are no
+      // published images to return, so it would only cost the server the
+      // queries that load the relation. The sets that actually publish get
+      // their images from backfillSlideshows instead — one extra request per
+      // upload, rather than that cost on every poll.
+      .find<WaterfallSet[]>('waterfall-sets', ids, { include: this.pollInclude })
       .then(() => {
         // The store mutated the pending models in place (status and cover).
         this.touch();
         this.pollFailures = 0;
         m.redraw();
+
+        this.backfillSlideshows(pending);
       })
       .catch(() => {
         // Do not swallow poll failures silently: after a few consecutive
@@ -304,6 +368,46 @@ export default class WaterfallState {
       .then(() => {
         this.refreshing = false;
       });
+  }
+
+  /**
+   * Load the slideshow images of the sets that just stopped being pending.
+   *
+   * The poll asks without the `images` include (see refreshPending), so a card
+   * that publishes during a poll has no images loaded and its slideshow would
+   * stay empty until the next full page load. One request for the sets that
+   * actually published — usually none, and at most one per upload — is far
+   * cheaper than carrying the include on every poll.
+   *
+   * Failures are swallowed: the caller runs inside the poll's promise chain,
+   * where a throw would be counted as a poll failure and eventually tell the
+   * reader the status could not be refreshed — which would be wrong, the poll
+   * itself succeeded. The images come back on the next poll or reload.
+   */
+  protected backfillSlideshows(sets: WaterfallSet[]): void {
+    if (!this.slideshow) {
+      return;
+    }
+
+    // `images()` is undefined while the relation is unloaded, which is exactly
+    // the case this backfills. Only a published set has images to show: a set
+    // that went pending -> failed has none, and asking for them would be a
+    // request that can only come back empty.
+    const ids = sets
+      .filter((set) => set.status() === 'published' && !set.images())
+      .map((set) => set.id())
+      .filter((id): id is string => !!id);
+
+    if (ids.length === 0) {
+      return;
+    }
+
+    try {
+      app.store.find('waterfall-sets', ids, { include: this.feedInclude }).catch(() => {});
+    } catch {
+      // Best effort by contract: the ids are only ever re-fetched, and the
+      // next poll or reload does it again.
+    }
   }
 
   /**

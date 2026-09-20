@@ -305,6 +305,142 @@ class WaterfallImagesTest extends TestCase
     }
 
     /**
+     * The batch endpoint has to count exactly what the per-image one would:
+     * each published id once (a repeat inside the payload is not a second
+     * view), nothing for unpublished or unknown ids, and the owning set's
+     * total moving with the images it aggregates.
+     */
+    #[Test]
+    public function batch_views_count_each_published_image_once()
+    {
+        $now = Carbon::now();
+
+        $this->prepareDatabase([
+            WaterfallSet::class => [
+                ['id' => 20, 'user_id' => 2, 'title' => 'Pair', 'cover_image_id' => 30, 'images_count' => 2, 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+            ],
+            WaterfallImage::class => [
+                ['id' => 30, 'user_id' => 2, 'set_id' => 20, 'position' => 0, 'src' => '/file/s1.png', 'thumb' => null, 'title' => 'First', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+                ['id' => 31, 'user_id' => 2, 'set_id' => 20, 'position' => 1, 'src' => '/file/s2.png', 'thumb' => null, 'title' => 'Second', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+                // A legacy row without a set: it still counts on its own, it
+                // just has no set total to move.
+                ['id' => 32, 'user_id' => 2, 'set_id' => null, 'position' => 0, 'src' => '/file/legacy.png', 'thumb' => null, 'title' => 'Legacy', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+                ['id' => 33, 'user_id' => 2, 'set_id' => 20, 'position' => 2, 'src' => '', 'thumb' => null, 'title' => 'Pending', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'pending', 'created_at' => $now, 'updated_at' => $now],
+            ],
+        ]);
+
+        // Anonymous, like a reader who is not logged in: the view counter is
+        // open to guests, so it is the guest path that has to be covered.
+        $response = $this->send(
+            $this->requestWithCsrfToken(
+                $this->requestWithJsonBody(
+                    $this->request('POST', '/api/waterfall-images/views'),
+                    ['ids' => [30, 31, 32, 33, 999, 30]]
+                )
+            )
+        );
+
+        $this->assertEquals(200, $response->getStatusCode(), (string) $response->getBody());
+        $this->assertEquals(['counted' => 3], json_decode((string) $response->getBody(), true));
+
+        $this->assertEquals(1, WaterfallImage::query()->find(30)->views_count);
+        $this->assertEquals(1, WaterfallImage::query()->find(31)->views_count);
+        $this->assertEquals(1, WaterfallImage::query()->find(32)->views_count);
+        $this->assertEquals(0, WaterfallImage::query()->find(33)->views_count);
+        $this->assertEquals(2, WaterfallSet::query()->find(20)->views_count);
+    }
+
+    /**
+     * A counted view is one per IP per image per minute, so replaying a batch
+     * — the same reader reopening the lightbox, or a scripted client — must
+     * leave the counters where they were.
+     */
+    #[Test]
+    public function batch_views_are_counted_once_per_ip()
+    {
+        $now = Carbon::now();
+
+        $this->prepareDatabase([
+            WaterfallImage::class => [
+                ['id' => 40, 'user_id' => 2, 'set_id' => null, 'position' => 0, 'src' => '/file/x.png', 'thumb' => null, 'title' => 'Once', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+            ],
+        ]);
+
+        for ($i = 0; $i < 2; $i++) {
+            $this->send(
+                $this->requestWithCsrfToken(
+                    $this->requestWithJsonBody(
+                        $this->request('POST', '/api/waterfall-images/views'),
+                        ['ids' => [40]]
+                    )
+                )
+            );
+        }
+
+        $this->assertEquals(1, WaterfallImage::query()->find(40)->views_count);
+    }
+
+    /**
+     * The two view endpoints have to agree on what a view is. The batch route
+     * is what the lightbox uses; the per-image one stays part of the public
+     * API (documented, and what any other client calls), and both write the
+     * counter the recommendation score reads. Each direction is covered, since
+     * sharing the window is the property, not the call order.
+     */
+    #[Test]
+    public function the_single_and_batch_endpoints_share_the_counting_window()
+    {
+        $now = Carbon::now();
+
+        $this->prepareDatabase([
+            WaterfallImage::class => [
+                ['id' => 50, 'user_id' => 2, 'set_id' => null, 'position' => 0, 'src' => '/file/shared-a.png', 'thumb' => null, 'title' => 'Shared A', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+                ['id' => 51, 'user_id' => 2, 'set_id' => null, 'position' => 0, 'src' => '/file/shared-b.png', 'thumb' => null, 'title' => 'Shared B', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => 'published', 'created_at' => $now, 'updated_at' => $now],
+            ],
+        ]);
+
+        $single = fn (int $id) => $this->requestWithCsrfToken($this->request('POST', "/api/waterfall-images/$id/view"));
+        $batch = fn (int $id) => $this->requestWithCsrfToken(
+            $this->requestWithJsonBody(
+                $this->request('POST', '/api/waterfall-images/views'),
+                ['ids' => [$id]]
+            )
+        );
+
+        // Image 50: the per-image route first, the batch second.
+        $this->send($single(50));
+        $this->send($batch(50));
+
+        // Image 51: the other way round.
+        $this->send($batch(51));
+        $this->send($single(51));
+
+        $this->assertEquals(1, WaterfallImage::query()->find(50)->views_count);
+        $this->assertEquals(1, WaterfallImage::query()->find(51)->views_count);
+    }
+
+    /**
+     * An empty or malformed payload is a no-op rather than an error: the
+     * lightbox only ever sends what it viewed, and a client sending nothing
+     * must not cost a query.
+     */
+    #[Test]
+    public function batch_views_ignore_an_empty_payload()
+    {
+        $response = $this->send(
+            $this->requestWithCsrfToken(
+                $this->requestWithJsonBody(
+                    $this->request('POST', '/api/waterfall-images/views'),
+                    ['ids' => [0, -1, 'nope']]
+                )
+            )
+        );
+
+        $this->assertEquals(200, $response->getStatusCode(), (string) $response->getBody());
+        $this->assertEquals(['counted' => 0], json_decode((string) $response->getBody(), true));
+    }
+
+    /**
      * Deleting an image has to leave its set's denormalised counters and cover
      * in step with the rows that are left: the feed reads those columns without
      * joining the images table. This said the feed's pagination offset came

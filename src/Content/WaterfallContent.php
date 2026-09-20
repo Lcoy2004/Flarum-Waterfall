@@ -35,9 +35,81 @@ class WaterfallContent
     {
         $document->title = $this->translator->trans('lcoy-waterfall.forum.page.title');
         $document->meta['description'] = $this->translator->trans('lcoy-waterfall.forum.page.description');
-        $document->payload['apiDocument'] = $this->getFirstPageDocument($request);
+
+        $firstPage = $this->getFirstPageDocument($request);
+
+        $document->payload['apiDocument'] = $firstPage;
+        $this->addImageHostHint($document, $firstPage, $request);
 
         return $document;
+    }
+
+    /**
+     * Start the connection to the image host while the page is still parsing.
+     *
+     * Covers and thumbnails live on whatever host the upload API returned —
+     * normally a different origin than the forum — so the first image of a
+     * visit otherwise pays DNS + TCP + TLS before a single byte of it can
+     * arrive, and all of that sits after the HTML. `preconnect` overlaps the
+     * handshake with the rest of the page load instead.
+     *
+     * The origin is read off the preloaded page rather than a setting because
+     * the upload response is what decides it: the configured upload URL is an
+     * API endpoint, which need not be the host that ends up serving the files.
+     * No preloaded images means nothing to warm, and nothing is emitted.
+     *
+     * Deliberately without `crossorigin`: images are fetched without CORS, and
+     * a CORS-mode preconnect opens a *separate* connection that the image
+     * request cannot reuse. Core's own hints carry it because they warm fonts
+     * and scripts, which are CORS requests.
+     */
+    protected function addImageHostHint(Document $document, ?array $firstPage, Request $request): void
+    {
+        $origin = $this->imageHostOrigin($firstPage);
+
+        $uri = $request->getUri();
+
+        if ($origin === null || $origin === $uri->getScheme().'://'.$uri->getHost()) {
+            return;
+        }
+
+        $href = e($origin);
+
+        // preHead rather than head: the hint is only worth anything before the
+        // stylesheet and the first images are discovered.
+        $document->preHead[] = '<link rel="preconnect" href="'.$href.'">';
+        $document->preHead[] = '<link rel="dns-prefetch" href="'.$href.'">';
+    }
+
+    /**
+     * The origin the preloaded images actually point at, or null when the page
+     * preloaded no images — or only relative ones, which are same-origin by
+     * definition.
+     */
+    protected function imageHostOrigin(?array $firstPage): ?string
+    {
+        foreach ($firstPage['included'] ?? [] as $resource) {
+            foreach (['src', 'thumb'] as $key) {
+                $url = $resource['attributes'][$key] ?? null;
+
+                if (! is_string($url) || ! str_starts_with($url, 'http')) {
+                    continue;
+                }
+
+                $parts = parse_url($url);
+
+                // parse_url() answers false (not an array) for a string it
+                // cannot parse at all, and the URLs here come from the image
+                // host's response, so neither shape can be assumed away.
+                if (! is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+                    continue;
+                }
+
+                return $parts['scheme'].'://'.$parts['host'].(isset($parts['port']) ? ':'.$parts['port'] : '');
+            }
+        }
+
+        return null;
     }
 
     protected function getFirstPageDocument(Request $request): ?array

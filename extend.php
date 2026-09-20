@@ -13,6 +13,7 @@ use Flarum\Api\Endpoint;
 use Flarum\Api\Resource\ForumResource;
 use Flarum\Extend;
 use Flarum\Search\Database\DatabaseSearchDriver;
+use Lcoy\Waterfall\Api\Controller\RecordViewsController;
 use Lcoy\Waterfall\Api\Controller\TestImageHostController;
 use Lcoy\Waterfall\Api\WaterfallImageResource;
 use Lcoy\Waterfall\Api\WaterfallSetResource;
@@ -50,8 +51,14 @@ return [
     new Extend\ApiResource(WaterfallUploadLogResource::class),
 
     // Admin-only image host connectivity/auth check (backing the test button).
+    //
+    // The batch view counter lives here too rather than on the image resource:
+    // it is a plain JSON endpoint, and routing it this way keeps it off the
+    // JSON:API path (no document to build, no resource to serialize) — which
+    // is most of what makes a per-image request expensive.
     (new Extend\Routes('api'))
-        ->post('/waterfall/test-host', 'waterfall.test-host', TestImageHostController::class),
+        ->post('/waterfall/test-host', 'waterfall.test-host', TestImageHostController::class)
+        ->post('/waterfall-images/views', 'waterfall.views', RecordViewsController::class),
 
     // Expose the upload permission on the forum document so the frontend can
     // show or hide the upload button without an extra request.

@@ -228,8 +228,10 @@ score = weight_likes   * log10(1 + likes_count)
 scores.
 
 Recalculation is off the request path. Uploads compute the score as part of the
-publish write; likes, unlikes and views dispatch `RecalculateScoreJob`. Views are
-coalesced to at most one recalculation per image per minute.
+publish write; likes, unlikes and views dispatch `RecalculateScoresJob`, which
+carries a batch of image ids (a whole lightbox page arrives as one job) and
+re-syncs each affected set once. Views are coalesced to at most one
+recalculation per image per minute.
 
 ## API
 
@@ -257,6 +259,7 @@ Two JSON:API resources back the feature: `waterfall-sets` (the feed) and
 | POST   | `/api/waterfall-images/{id}/like` | Like (idempotent, needs `lcoy-waterfall.like`)     |
 | DELETE | `/api/waterfall-images/{id}/like` | Unlike (idempotent)                                |
 | POST   | `/api/waterfall-images/{id}/view` | Record a view (1 per IP per image per minute)      |
+| POST   | `/api/waterfall-images/views`     | Record a batch of views (same counting rules)      |
 
 ### Other endpoints
 
@@ -562,7 +565,8 @@ score = weight_likes   * log10(1 + likes_count)
 `age_hours` 为图片已发布的小时数。集的评分等于其所有图片评分之和。
 
 重算不在请求链路上:上传时随发布写入一并计算;点赞、取消点赞与浏览会派发
-`RecalculateScoreJob`。浏览的重算被合并为每图每分钟至多一次。
+`RecalculateScoresJob`——它携带一批图片 id(一次灯箱浏览合成一个任务),并把
+受影响的集各同步一次。浏览的重算被合并为每图每分钟至多一次。
 
 ## API
 
@@ -590,6 +594,7 @@ score = weight_likes   * log10(1 + likes_count)
 | POST   | `/api/waterfall-images/{id}/like` | 点赞(幂等,需 `lcoy-waterfall.like`)             |
 | DELETE | `/api/waterfall-images/{id}/like` | 取消点赞(幂等)                                  |
 | POST   | `/api/waterfall-images/{id}/view` | 记录浏览(每 IP 每图每分钟 1 次)                 |
+| POST   | `/api/waterfall-images/views`     | 批量记录浏览(计数规则相同,一次请求一批)         |
 
 ### 其他接口
 

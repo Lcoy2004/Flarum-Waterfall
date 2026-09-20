@@ -13,6 +13,12 @@ import type WaterfallImage from '../../common/models/WaterfallImage';
 
 export interface WaterfallCardAttrs {
   set: WaterfallSet;
+  /**
+   * Fetch the cover with high priority instead of deferring it. Set for the
+   * first card only: its cover is the page's LCP element, and `loading="lazy"`
+   * holds it back until after layout.
+   */
+  eager?: boolean;
   onclick: () => void;
   onDelete: (set: WaterfallSet) => void;
 }
@@ -456,7 +462,8 @@ export default class WaterfallCard<CustomAttrs extends WaterfallCardAttrs = Wate
               className={classList('WaterfallCard-img', { 'WaterfallCard-img--loaded': this.isSlideLoaded(cover) })}
               src={cover.displaySrc()}
               alt={title}
-              loading="lazy"
+              loading={this.attrs.eager ? 'eager' : 'lazy'}
+              fetchpriority={this.attrs.eager ? 'high' : undefined}
               decoding="async"
               onload={() => {
                 this.markSlideLoaded(cover);
@@ -470,25 +477,34 @@ export default class WaterfallCard<CustomAttrs extends WaterfallCardAttrs = Wate
           )}
 
           {hasSlides &&
-            this.windowSlides(slides).map((image) => (
-              <img
-                key={this.slideKey(image)}
-                className={classList('WaterfallCard-img', 'WaterfallCard-img--slide', {
-                  'WaterfallCard-img--loaded': this.isSlideLoaded(image),
-                  'WaterfallCard-img--active': image === slides[this.slide],
-                })}
-                src={image.displaySrc()}
-                alt={title}
-                loading="lazy"
-                decoding="async"
-                onload={() => {
-                  this.markSlideLoaded(image);
-                }}
-                onerror={() => {
-                  this.markSlideLoaded(image);
-                }}
-              />
-            ))}
+            this.windowSlides(slides).map((image) => {
+              // Only the frame actually on screen inherits the eager hint: the
+              // neighbours the window pre-mounts are there to be ready for the
+              // next tick, not to compete with the cover the reader is waiting
+              // for.
+              const eager = !!this.attrs.eager && image === slides[this.slide];
+
+              return (
+                <img
+                  key={this.slideKey(image)}
+                  className={classList('WaterfallCard-img', 'WaterfallCard-img--slide', {
+                    'WaterfallCard-img--loaded': this.isSlideLoaded(image),
+                    'WaterfallCard-img--active': image === slides[this.slide],
+                  })}
+                  src={image.displaySrc()}
+                  alt={title}
+                  loading={eager ? 'eager' : 'lazy'}
+                  fetchpriority={eager ? 'high' : undefined}
+                  decoding="async"
+                  onload={() => {
+                    this.markSlideLoaded(image);
+                  }}
+                  onerror={() => {
+                    this.markSlideLoaded(image);
+                  }}
+                />
+              );
+            })}
 
           {imagesCount > 0 && (
             <span

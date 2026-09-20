@@ -27,7 +27,7 @@ use Illuminate\Database\Query\Expression;
 use Lcoy\Waterfall\Api\Endpoint\UploadImageEndpoint;
 use Lcoy\Waterfall\Event\ImageWasLiked;
 use Lcoy\Waterfall\Event\ImageWasUnliked;
-use Lcoy\Waterfall\Jobs\RecalculateScoreJob;
+use Lcoy\Waterfall\Jobs\RecalculateScoresJob;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallImageLike;
 use Lcoy\Waterfall\Model\WaterfallSet;
@@ -148,7 +148,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
                             $image->increment('likes_count');
 
                             $this->events->dispatch(new ImageWasLiked($image, $actor));
-                            $this->queue->push(new RecalculateScoreJob($image));
+                            $this->queue->push(new RecalculateScoresJob([$image->id]));
                         }
                     }
 
@@ -191,7 +191,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
                             ->decrement('likes_count');
 
                         $this->events->dispatch(new ImageWasUnliked($image, $actor));
-                        $this->queue->push(new RecalculateScoreJob($image));
+                        $this->queue->push(new RecalculateScoresJob([$image->id]));
                     }
 
                     return $image;
@@ -228,7 +228,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
                             // score is recomputed from the live counters, so
                             // nothing is lost.
                             if ($this->cache->add('lcoy-waterfall.score.'.$image->id, 1, 60)) {
-                                $this->queue->push(new RecalculateScoreJob($image));
+                                $this->queue->push(new RecalculateScoresJob([$image->id]));
                             }
                         }
                     }

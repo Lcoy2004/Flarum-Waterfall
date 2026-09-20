@@ -58,9 +58,25 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
   // point where the image on screen actually changes (mount, navigate,
   // delete) and cleared by the <img> load/error handlers. The browser keeps
   // painting the outgoing image after its src is swapped, which without a
-  // signal looks exactly like navigation doing nothing — so the old image is
-  // dimmed and a spinner takes over until the new one is ready.
+  // signal looks exactly like navigation doing nothing — so the outgoing
+  // frame is dimmed, the incoming image's cached thumbnail is painted over it
+  // (the --thumb rule in the stylesheet) and a spinner sits on top, until the
+  // full-size bytes arrive.
   protected imgLoading = true;
+
+  /**
+   * Full-size URLs already requested by the neighbour prefetch, so a redraw
+   * never asks for the same image twice. Only ever holds the handful of
+   * images the user came near, and dies with the component.
+   */
+  protected prefetched = new Set<string>();
+
+  /**
+   * Live prefetch requests. They are kept referenced only so the browser
+   * cannot collect an <img> whose download is still in flight (a dropped
+   * element aborts its request), and released when the lightbox closes.
+   */
+  protected prefetchHandles: HTMLImageElement[] = [];
 
   oncreate(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
     super.oncreate(vnode);
@@ -69,6 +85,7 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     this.previouslyFocused = document.activeElement as HTMLElement | null;
 
     this.reportView();
+    this.prefetchNeighbours();
 
     (this.element as HTMLElement).focus();
   }
@@ -80,11 +97,18 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     // reported here rather than only in oncreate.
     this.reportView();
     this.maybeLoadMore();
+    // Idempotent (guarded by `prefetched`), and the only place that covers
+    // every way the visible image can change: arrows, swipe, keyboard and
+    // delete all end in a redraw.
+    this.prefetchNeighbours();
 
     // A cached image can finish decoding before the onload handler is
     // attached; the element's complete flag covers that race so the spinner
-    // can never get stuck on an image that is already there.
-    const img = this.element?.querySelector('img.WaterfallLightbox-img') as HTMLImageElement | null;
+    // can never get stuck on an image that is already there. The thumbnail
+    // stand-in carries the same base class and is complete almost instantly,
+    // so it is excluded explicitly rather than relying on it being rendered
+    // after the real frame.
+    const img = this.element?.querySelector('img.WaterfallLightbox-img:not(.WaterfallLightbox-img--thumb)') as HTMLImageElement | null;
 
     if (this.imgLoading && img?.complete) {
       this.imgLoading = false;
@@ -105,13 +129,45 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     super.onremove(vnode);
     document.removeEventListener('keydown', this.keydownHandler);
 
+    // Release the prefetches: nothing should still be downloading for a
+    // viewer that is gone.
+    this.prefetchHandles = [];
+
+    // Closing the viewer is the common end of a viewing session, so this is
+    // where its buffered views go out — one request for the whole session.
+    Lightbox.flushViews();
+
     if (this.previouslyFocused && document.contains(this.previouslyFocused)) {
       this.previouslyFocused.focus();
     }
   }
 
   /**
-   * Report a view once per image per page session.
+   * How long a counted view may wait in the buffer before it is sent, and how
+   * many ids make the buffer flush early. Ten seconds is short enough that a
+   * stray view is never held for long, and long enough that paging through a
+   * set collapses into a single request.
+   */
+  protected static readonly VIEW_FLUSH_DELAY = 10000;
+  protected static readonly VIEW_BATCH_MAX = 50;
+
+  /**
+   * Views counted but not yet sent, and the pending flush timer. Deliberately
+   * page-level state: the buffer outlives the lightbox that filled it, because
+   * a tab hidden mid-session still has views to report.
+   */
+  protected static pendingViews = new Set<string>();
+  protected static viewFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  protected static exitHookInstalled = false;
+
+  /**
+   * Count a view once per image per page session — batched.
+   *
+   * One request per image meant one whole framework boot on the server (and
+   * one transaction) to add one to a counter. The ids are collected and sent
+   * together instead: when the batch is full, after ten seconds, on close, or
+   * as the page is left — so the same views cost one request rather than one
+   * per image, and a session that ends normally reports all of them.
    */
   protected reportView(): void {
     const image = this.current();
@@ -121,12 +177,76 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     }
 
     Lightbox.viewSession.add(image.id()!);
+    Lightbox.pendingViews.add(image.id()!);
+    Lightbox.installExitHook();
+
+    if (Lightbox.pendingViews.size >= Lightbox.VIEW_BATCH_MAX) {
+      Lightbox.flushViews();
+
+      return;
+    }
+
+    Lightbox.viewFlushTimer ??= setTimeout(() => Lightbox.flushViews(), Lightbox.VIEW_FLUSH_DELAY);
+  }
+
+  /**
+   * Send everything buffered in one request.
+   *
+   * The buffer is emptied before the request goes out, so a concurrent flush
+   * cannot report the same id twice. A failed send is dropped rather than
+   * retried — counting views is best-effort (the same `.catch(() => {})` the
+   * per-image request had), and the server counts at most one view per IP per
+   * image per minute regardless.
+   */
+  protected static flushViews(): void {
+    if (Lightbox.viewFlushTimer !== null) {
+      clearTimeout(Lightbox.viewFlushTimer);
+      Lightbox.viewFlushTimer = null;
+    }
+
+    if (Lightbox.pendingViews.size === 0) {
+      return;
+    }
+
+    const ids = [...Lightbox.pendingViews];
+
+    Lightbox.pendingViews.clear();
+
     app
       .request({
         method: 'POST',
-        url: `${app.forum.attribute('apiUrl')}/waterfall-images/${image.id()}/view`,
+        url: `${app.forum.attribute('apiUrl')}/waterfall-images/views`,
+        body: { ids },
       })
       .catch(() => {});
+  }
+
+  /**
+   * Flush on the way out of the page: when the tab goes hidden, and when the
+   * page is put in the back/forward cache.
+   *
+   * Hidden covers switching tabs and backgrounding the browser. `pagehide` is
+   * the companion that matters on phones: a page entering the back/forward
+   * cache is frozen — its timers stop — and neither event is guaranteed to
+   * have been delivered before that happens, so this is the last moment a
+   * request can still leave. Registered once for the page, since the buffer is
+   * page-level too. A process that is killed outright (low memory, crash)
+   * reports nothing, which is why the buffer is also sent on a timer.
+   */
+  protected static installExitHook(): void {
+    if (Lightbox.exitHookInstalled) {
+      return;
+    }
+
+    Lightbox.exitHookInstalled = true;
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        Lightbox.flushViews();
+      }
+    });
+
+    document.addEventListener('pagehide', () => Lightbox.flushViews());
   }
 
   protected keydownHandler = (e: KeyboardEvent) => {
@@ -161,8 +281,9 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     this.panX = 0;
     this.panY = 0;
     // The incoming image is almost never decoded yet, and until it is the
-    // browser keeps showing the outgoing one — flag the load so the spinner
-    // (and the dimmed old image) make the move visible.
+    // browser keeps showing the outgoing one — flag the load so the spinner,
+    // the dimmed outgoing frame and the thumbnail stand-in make the move
+    // visible.
     this.imgLoading = true;
     this.attrs.onNavigate(next);
     this.maybeLoadMore();
@@ -180,6 +301,42 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
 
     if (this.attrs.index >= this.attrs.images.length - 5) {
       this.attrs.onNearEnd();
+    }
+  }
+
+  /**
+   * Pull the neighbouring full-size images into the browser cache before the
+   * user asks for them.
+   *
+   * This is what separates a swipe that lands instantly from one that shows a
+   * spinner: without it every navigation starts a cold multi-megabyte
+   * download, which is the most expensive thing the lightbox does on a phone.
+   * Only the immediate neighbours are fetched — plus one further ahead, so a
+   * quick double-tap of "next" still lands on a warm cache — never the whole
+   * set, which would spend the reader's data on images they may not open.
+   */
+  protected prefetchNeighbours(): void {
+    const { images, index } = this.attrs;
+
+    if (images.length === 0) {
+      return;
+    }
+
+    for (const offset of [1, -1, 2]) {
+      // Wrapped exactly as navigate() wraps, so stepping off either end of the
+      // set lands on a prefetched image instead of a cold download.
+      const url = images[(index + offset + images.length) % images.length]?.src();
+
+      if (!url || this.prefetched.has(url)) {
+        continue;
+      }
+
+      this.prefetched.add(url);
+
+      const handle = new Image();
+      handle.decoding = 'async';
+      handle.src = url;
+      this.prefetchHandles.push(handle);
     }
   }
 
@@ -335,6 +492,7 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     const isLiked = image.isLiked();
     const likers = (image.likes() || []).filter((liker): liker is User => !!liker).slice(0, 5);
     const transform = `translate3d(${this.panX}px, ${this.panY}px, 0) scale(${this.scale})`;
+    const thumb = image.displaySrc();
 
     return (
       <div
@@ -375,8 +533,28 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
             </div>
           )}
 
-          {/* Over the dimmed previous image while the next one downloads, so
-              navigation visibly did something instead of looking stuck. */}
+          {/* The card thumbnail, painted the instant the visible image
+              changes: it is already in the browser cache from the grid, so the
+              right picture is on screen even while the full-size bytes are
+              still travelling. The full-size frame underneath takes over when
+              it arrives (the spinner below stays on top of both).
+
+              Rendered only when it is a genuinely different URL — with no
+              thumbnail configured displaySrc() falls back to src(), and a
+              second copy of the same image would be a wasted element. */}
+          {this.imgLoading && thumb && thumb !== image.src() && (
+            <img
+              className="WaterfallLightbox-img WaterfallLightbox-img--thumb"
+              src={thumb}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+              style={{ transform }}
+            />
+          )}
+
+          {/* Over whichever frame is showing while the full-size one downloads,
+              so navigation reads as "still loading" instead of "stuck". */}
           {this.imgLoading && image.src() && (
             <LoadingIndicator className="WaterfallLightbox-loading" containerClassName="WaterfallLightbox-loadingContainer" size="large" />
           )}
