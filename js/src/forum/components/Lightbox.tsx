@@ -1,6 +1,7 @@
 import app from 'flarum/forum/app';
 import Component from 'flarum/common/Component';
 import Button from 'flarum/common/components/Button';
+import LoadingIndicator from 'flarum/common/components/LoadingIndicator';
 import Avatar from 'flarum/common/components/Avatar';
 import Link from 'flarum/common/components/Link';
 import type { AlertAttrs } from 'flarum/common/components/Alert';
@@ -53,6 +54,14 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
   protected previouslyFocused: HTMLElement | null = null;
   protected static viewSession = new Set<string>();
 
+  // True while the visible image's bytes are still downloading. Set at every
+  // point where the image on screen actually changes (mount, navigate,
+  // delete) and cleared by the <img> load/error handlers. The browser keeps
+  // painting the outgoing image after its src is swapped, which without a
+  // signal looks exactly like navigation doing nothing — so the old image is
+  // dimmed and a spinner takes over until the new one is ready.
+  protected imgLoading = true;
+
   oncreate(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
     super.oncreate(vnode);
 
@@ -71,7 +80,26 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     // reported here rather than only in oncreate.
     this.reportView();
     this.maybeLoadMore();
+
+    // A cached image can finish decoding before the onload handler is
+    // attached; the element's complete flag covers that race so the spinner
+    // can never get stuck on an image that is already there.
+    const img = this.element?.querySelector('img.WaterfallLightbox-img') as HTMLImageElement | null;
+
+    if (this.imgLoading && img?.complete) {
+      this.imgLoading = false;
+      m.redraw();
+    }
   }
+
+  /**
+   * The new image finished (or failed) downloading: restore full opacity.
+   * Failures clear the state too, so the spinner never outlives the image.
+   */
+  protected onImgLoad = () => {
+    this.imgLoading = false;
+    m.redraw();
+  };
 
   onremove(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
     super.onremove(vnode);
@@ -132,6 +160,10 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     this.scale = 1;
     this.panX = 0;
     this.panY = 0;
+    // The incoming image is almost never decoded yet, and until it is the
+    // browser keeps showing the outgoing one — flag the load so the spinner
+    // (and the dimmed old image) make the move visible.
+    this.imgLoading = true;
     this.attrs.onNavigate(next);
     this.maybeLoadMore();
   }
@@ -281,6 +313,9 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
         // appears already magnified and panned to wherever the deleted one was
         // left.
         this.resetZoom();
+        // Same reason as navigate(): whichever image takes this slot still has
+        // to be fetched.
+        this.imgLoading = true;
         this.attrs.onDelete?.(image);
       })
       .catch((error: { alert?: AlertAttrs | null }) => {
@@ -321,7 +356,15 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
           ondblclick={this.onDoubleClick}
         >
           {image.src() ? (
-            <img className="WaterfallLightbox-img" src={image.src()} alt={image.title() || ''} draggable={false} style={{ transform }} />
+            <img
+              className={classList('WaterfallLightbox-img', { 'is-loading': this.imgLoading })}
+              src={image.src()}
+              alt={image.title() || ''}
+              draggable={false}
+              style={{ transform }}
+              onload={this.onImgLoad}
+              onerror={this.onImgLoad}
+            />
           ) : (
             // A failed (or still-processing) image has no src; show why
             // instead of a broken-image icon. The error text is filtered
@@ -330,6 +373,12 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
               <i className="fas fa-exclamation-triangle" aria-hidden="true" />
               <p>{image.error() || extractText(app.translator.trans('lcoy-waterfall.forum.lightbox.failed_placeholder'))}</p>
             </div>
+          )}
+
+          {/* Over the dimmed previous image while the next one downloads, so
+              navigation visibly did something instead of looking stuck. */}
+          {this.imgLoading && image.src() && (
+            <LoadingIndicator className="WaterfallLightbox-loading" containerClassName="WaterfallLightbox-loadingContainer" size="large" />
           )}
         </div>
 
