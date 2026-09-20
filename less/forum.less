@@ -49,13 +49,29 @@
     gap: 0 16px;
 
     @media @phone {
-      // Narrow screens can't hold all three on one row: the grid collapses to
-      // a block, the button pins to the right of the title row (which the
-      // block's text-align centres), and the tabs drop to a centred row of
-      // their own below via their own margin.
-      display: block;
-      position: relative;
-      text-align: center;
+      // Narrow screens can't hold all three on one row. Two grid rows instead:
+      // title with the upload button beside it, the tabs centred on their own
+      // row below. Grid placement — not source order — decides the rows,
+      // because the DOM puts the tabs first; the old block + absolute-button
+      // fallback centred the button on the *stack* of both rows, landing it
+      // between the tabs and the title instead of beside the title.
+      grid-template-rows: auto auto;
+      gap: 12px 10px;
+
+      .WaterfallPage-title {
+        grid-row: 1;
+        grid-column: 2;
+      }
+
+      .WaterfallPage-uploadButton {
+        grid-row: 1;
+        grid-column: 3;
+      }
+
+      .WaterfallPage-tabs {
+        grid-row: 2;
+        grid-column: 1 / -1;
+      }
     }
   }
 
@@ -99,9 +115,11 @@
     border-radius: var(--border-radius);
 
     @media @phone {
-      // The block fallback centres block-level children through auto margins.
+      // Own grid row below the title (placed in &-heroTop's phone block);
+      // centred by the grid, so no margins are needed — the row gap handles
+      // the separation.
       justify-self: center;
-      margin: 14px auto 0;
+      margin: 0;
     }
   }
 
@@ -152,22 +170,6 @@
     &:active {
       transform: translateY(0);
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
-    }
-
-    @media @phone {
-      // The block fallback pins the button over the centred title row.
-      position: absolute;
-      right: 0;
-      top: 50%;
-      transform: translateY(-50%);
-
-      &:hover {
-        transform: translateY(calc(-50% - 1px));
-      }
-
-      &:active {
-        transform: translateY(-50%);
-      }
     }
   }
 
@@ -1273,10 +1275,21 @@
     }
   }
 
-  // Phones navigate by swiping (and the keyboard on tablets); the side arrows
-  // only crowd the image at this width.
+  // Swiping is the fast path on touch screens, but the arrows stay reachable:
+  // they are the discoverable affordance that says "there is more to see".
+  // 44px is the minimum comfortable tap target, hugging the edge so they sit
+  // clear of the image.
   .WaterfallLightbox-nav {
-    display: none;
+    width: 44px;
+    height: 44px;
+
+    &--prev {
+      left: 8px;
+    }
+
+    &--next {
+      right: 8px;
+    }
   }
 }
 

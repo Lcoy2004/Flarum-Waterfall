@@ -73,7 +73,7 @@ lcoy-waterfall:
       next: "Next image (→)"
       zoom_in: "Zoom in"
       zoom_out: "Zoom out"
-      zoom_hint: "Scroll to zoom · drag to pan · double-click to reset"
+      zoom_hint: "Scroll to zoom · drag to pan · swipe or arrows to browse · double-click to reset"
       counter: "{index} / {total}"
       failed_placeholder: "This image failed to process."
       delete_image: "Delete image"

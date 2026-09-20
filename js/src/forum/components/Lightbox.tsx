@@ -206,7 +206,30 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
     }
 
     if (this.pointers.size === 0) {
+      const start = this.pointerStart;
       this.pointerStart = null;
+
+      // Un-zoomed, the drag is a swipe gesture: the image follows the finger
+      // through panX while dragging, and a decisively horizontal release
+      // moves to the neighbouring image. A cancelled gesture (the browser
+      // took over — rare with touch-action:none, but possible) only springs
+      // back: its coordinates are whatever the cancel reported, not a
+      // deliberate release. Zoomed releases are panning and keep their
+      // offset — this branch never runs for them.
+      if (this.scale <= 1 && start) {
+        const dx = e.clientX - start.x;
+        const dy = e.clientY - start.y;
+
+        if (e.type === 'pointerup' && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+          this.navigate(dx < 0 ? 1 : -1);
+        } else {
+          // Not a swipe: an image that fits the stage never stays displaced —
+          // spring back (the img's transform transition animates it), keeping
+          // whatever zoom level was set.
+          this.panX = 0;
+          this.panY = 0;
+        }
+      }
     }
   };
 

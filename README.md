@@ -34,7 +34,7 @@ images in a lightbox.
 - Native browser lazy-loading, skeleton placeholders, infinite scroll
 - Optional cover slideshow per card (crossfades through the set's first images)
 - Dependency-free lightbox: keyboard navigation, wheel/pinch zoom, drag pan,
-  double-click reset, per-image likes and delete
+  swipe or arrows to browse, double-click reset, per-image likes and delete
 - Freeform tags per set (up to 5 tags, 20 characters each)
 - Inline title rename (owner or moderator)
 - Uploads relayed to an external image host asynchronously through Flarum's
@@ -383,7 +383,7 @@ MIT — see [LICENSE](LICENSE).
   (`repeat(auto-fill, minmax(min(280px, 45%), 1fr))`)——列数自适应,无需 JS 测量或虚拟滚动
 - 浏览器原生懒加载、骨架占位、无限滚动
 - 卡片封面幻灯片(在集内前几张图之间交叉淡入,可关闭)
-- 零依赖灯箱:键盘导航、滚轮/双指缩放、拖拽平移、双击复位、单图点赞与删除
+- 零依赖灯箱:键盘导航、滚轮/双指缩放、拖拽平移、左右滑动或箭头切换、双击复位、单图点赞与删除
 - 集级自由标签(最多 5 个,每个 20 字符)
 - 可原地重命名标题(作者或版主)
 - 上传经 Flarum 队列**异步转存**到外部图床,失败按指数退避重试

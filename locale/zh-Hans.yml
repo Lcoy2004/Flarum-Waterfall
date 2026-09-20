@@ -73,7 +73,7 @@ lcoy-waterfall:
       next: "下一张(→)"
       zoom_in: "放大"
       zoom_out: "缩小"
-      zoom_hint: "滚轮缩放 · 拖拽平移 · 双击复位"
+      zoom_hint: "滚轮缩放 · 拖拽平移 · 左右滑动或箭头切换 · 双击复位"
       counter: "{index} / {total}"
       failed_placeholder: "图片处理失败。"
       delete_image: "删除图片"
