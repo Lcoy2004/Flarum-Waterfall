@@ -15,6 +15,7 @@ use Flarum\Http\RequestUtil;
 use Flarum\Settings\SettingsRepositoryInterface;
 use GuzzleHttp\Client;
 use Laminas\Diactoros\Response\JsonResponse;
+use Lcoy\Waterfall\Upload\ExternalImageHostUploader;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
@@ -48,7 +49,10 @@ class TestImageHostController implements RequestHandlerInterface
 
         if ($url === '') {
             $errors[] = 'upload_url_empty';
-        } elseif (! filter_var($url, FILTER_VALIDATE_URL)) {
+        } elseif (! filter_var($url, FILTER_VALIDATE_URL) || ! ExternalImageHostUploader::urlUsesHttpScheme($url)) {
+            // The same rule a real upload enforces: a scheme like ftp:// or
+            // file:// passes filter_var, and the test exists to predict
+            // uploads — its verdict must not be able to disagree with them.
             $errors[] = 'upload_url_invalid';
         }
 

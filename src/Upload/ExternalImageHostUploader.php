@@ -82,11 +82,9 @@ class ExternalImageHostUploader
             throw new UploadException('image_host_not_configured', 'The image host upload URL is not configured.');
         }
 
-        // filter_var accepts file://, ftp:// and friends, and the transfer runs
-        // inside the worker, where a stray scheme could be pointed at the local
-        // filesystem or an internal address. The admin UI already documents
-        // http/https, so this only enforces what the setting promises.
-        if (! in_array(strtolower((string) parse_url($url, PHP_URL_SCHEME)), ['http', 'https'], true)) {
+        // filter_var accepts file://, ftp:// and friends (see
+        // urlUsesHttpScheme for why those must not reach the worker).
+        if (! static::urlUsesHttpScheme($url)) {
             throw new UploadException('image_host_not_configured', 'The image host upload URL must use http or https.');
         }
 
@@ -270,6 +268,21 @@ class ExternalImageHostUploader
         }
 
         return $options;
+    }
+
+    /**
+     * Whether the URL's scheme is http or https.
+     *
+     * filter_var(FILTER_VALIDATE_URL) accepts file://, ftp:// and friends, and
+     * the transfer runs inside the worker, where a stray scheme could be
+     * pointed at the local filesystem or an internal address. The admin UI
+     * already documents http/https, so this only enforces what the setting
+     * promises. Shared with the admin test button, whose verdict must not be
+     * able to disagree with what a real upload would do.
+     */
+    public static function urlUsesHttpScheme(string $url): bool
+    {
+        return in_array(strtolower((string) parse_url($url, PHP_URL_SCHEME)), ['http', 'https'], true);
     }
 
     /**
