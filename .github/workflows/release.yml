@@ -43,16 +43,23 @@ jobs:
       #
       # It is also why the version is bumped as part of preparing a tag rather
       # than after: the tag has to be pushed to run this at all.
+      #
+      # A tag may carry the conventional `v` prefix (`v1.0.13`) while the file
+      # holds a bare semver — a version string cannot start with a `v`, so the
+      # two could never be compared literally. Only the tag is normalised here;
+      # the file goes on holding a valid version, which is the whole point of
+      # keeping the two in step.
       - name: Check the package version against the tag
         run: |
           VERSION=$(node -p "require('./js/package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
 
-          if [ "$VERSION" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::js/package.json declares version $VERSION but the tag is ${GITHUB_REF_NAME}. Bump js/package.json to ${GITHUB_REF_NAME} before tagging."
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::js/package.json declares version $VERSION but the tag is ${GITHUB_REF_NAME} (version ${TAG}). Bump js/package.json to ${TAG} before tagging."
             exit 1
           fi
 
-          echo "js/package.json matches the tag (${GITHUB_REF_NAME})."
+          echo "js/package.json matches the tag (${GITHUB_REF_NAME} → ${TAG})."
 
       # --frozen-lockfile: the committed js/yarn.lock is what gets installed,
       # so two runs of this job (and a local build) resolve byte-identical
