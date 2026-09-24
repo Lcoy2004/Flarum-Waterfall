@@ -261,10 +261,15 @@ export default class WaterfallState {
   /**
    * How long this tick waits before checking: the configured interval,
    * doubling with every check that still found the set pending, and never
-   * longer than POLL_MAX_INTERVAL.
+   * longer than POLL_MAX_INTERVAL — unless the admin configured something
+   * slower than that cap, in which case their setting wins: a cap is there to
+   * stop the backoff from growing without bound, not to interrogate a server
+   * more often than it was told to.
    */
   protected pollDelay(): number {
-    return Math.min(this.pollInterval * 2 ** this.pollTick, WaterfallState.POLL_MAX_INTERVAL);
+    const cap = Math.max(WaterfallState.POLL_MAX_INTERVAL, this.pollInterval);
+
+    return Math.min(this.pollInterval * 2 ** this.pollTick, cap);
   }
 
   /**
@@ -389,12 +394,25 @@ export default class WaterfallState {
       return;
     }
 
-    // `images()` is undefined while the relation is unloaded, which is exactly
-    // the case this backfills. Only a published set has images to show: a set
-    // that went pending -> failed has none, and asking for them would be a
-    // request that can only come back empty.
+    // `images()` comes back false only while the relation is unloaded. An
+    // empty array means the opposite of what it looks like: when the feed
+    // carries the include, the server scopes the relationship to published
+    // images, so a set that is still transferring arrives with `images: []`.
+    // Reading that as "already loaded" leaves the card without its slideshow
+    // for the rest of the session, which is precisely what this backfills.
+    //
+    // Only a published set is worth asking about: one that went pending ->
+    // failed has no images to show, and the request could only come back empty.
     const ids = sets
-      .filter((set) => set.status() === 'published' && !set.images())
+      .filter((set) => {
+        if (set.status() !== 'published') {
+          return false;
+        }
+
+        const images = set.images();
+
+        return images === false || images.length === 0;
+      })
       .map((set) => set.id())
       .filter((id): id is string => !!id);
 
@@ -465,6 +483,15 @@ export default class WaterfallState {
       this.sets = [set, ...this.sets];
       this.offset += 1;
     }
+
+    // The session's clock is restarted by a new arrival. It is what
+    // failStalePending() measures to decide the pending cards were abandoned,
+    // and an upload that just started must not inherit the age of one that has
+    // been running for minutes — it would be condemned seconds after arriving,
+    // with its own transfer still going perfectly well.
+    this.pollStartedAt = Date.now();
+    this.pollTick = 0;
+    this.pollFailures = 0;
 
     this.startPollingIfNeeded();
     m.redraw();

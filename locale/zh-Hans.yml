@@ -59,6 +59,7 @@ lcoy-waterfall:
       choose_files: "选择文件"
       drop_here: "将图片拖拽到此处"
       uploading: "正在上传 {done}/{total}…"
+      waiting_capacity: "等待前面的图片处理完成…"
       overall_progress: "整体进度"
       retry: "重试"
       cancel: "取消"

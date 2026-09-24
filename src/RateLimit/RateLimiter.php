@@ -41,6 +41,13 @@ class RateLimiter
     /**
      * Enforce per-user limits at request time.
      *
+     * The keys below are not form fields: Flarum turns each one into
+     * `source.pointer` in the JSON:API error document, which is how the upload
+     * modal tells the two refusals apart without matching translated text. It
+     * matters because they call for different reactions — a full upload
+     * capacity clears on its own within seconds, so the modal waits and sends
+     * the file again, while an hourly quota does not.
+     *
      * @throws ValidationException
      */
     public function assertUserMayUpload(User $actor): void
@@ -55,7 +62,7 @@ class RateLimiter
 
             if ($uploadedLastHour >= $hourlyLimit) {
                 throw new ValidationException([
-                    'file' => $this->translator->trans('lcoy-waterfall.api.errors.hourly_limit'),
+                    'upload_quota' => $this->translator->trans('lcoy-waterfall.api.errors.hourly_limit'),
                 ]);
             }
         }
@@ -70,7 +77,7 @@ class RateLimiter
 
             if ($pending >= $concurrentLimit) {
                 throw new ValidationException([
-                    'file' => $this->translator->trans('lcoy-waterfall.api.errors.concurrency_limit'),
+                    'upload_capacity' => $this->translator->trans('lcoy-waterfall.api.errors.concurrency_limit'),
                 ]);
             }
         }

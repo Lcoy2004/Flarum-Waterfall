@@ -46,6 +46,42 @@ interface QueueItem {
   // Set when the user cancels an in-flight upload: the sequential upload
   // chain must not immediately pick this item up again.
   cancelled: boolean;
+  // Set while the item is between attempts because the server had no capacity
+  // left for it (see uploadItem): the row says so instead of showing a
+  // progress figure that is not moving.
+  waitingForCapacity?: boolean;
+}
+
+/**
+ * The `detail` of the first error in a JSON:API error document, falling back
+ * to the HTTP status when the body is something else.
+ */
+function readErrorDetail(xhr: XMLHttpRequest): string {
+  try {
+    const payload = JSON.parse(xhr.responseText);
+    const detail = payload?.errors?.[0]?.detail || payload?.errors?.[0]?.title;
+
+    return typeof detail === 'string' ? detail : `HTTP ${xhr.status}`;
+  } catch {
+    return `HTTP ${xhr.status}`;
+  }
+}
+
+/**
+ * Whether the server refused only because this uploader already has as many
+ * images in flight as the admin allows.
+ *
+ * Matched on the error's `source.pointer` — the key RateLimiter throws under
+ * for exactly this case — and not on the message, which is translated.
+ */
+function isCapacityRejection(responseText: string): boolean {
+  try {
+    const pointer = JSON.parse(responseText)?.errors?.[0]?.source?.pointer;
+
+    return typeof pointer === 'string' && pointer.endsWith('/upload_capacity');
+  } catch {
+    return false;
+  }
 }
 
 export interface WaterfallUploadModalAttrs extends IInternalModalAttrs {
@@ -65,6 +101,16 @@ export interface WaterfallUploadModalAttrs extends IInternalModalAttrs {
  * `pending` resource; the queue worker then transfers them to the image host.
  */
 export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadModalAttrs = WaterfallUploadModalAttrs> extends Modal<CustomAttrs> {
+  /**
+   * How long an item waits for the uploader's own in-flight images to finish,
+   * and how many times it asks again before giving up and offering the manual
+   * retry. The wait grows with each attempt, and the whole budget stays inside
+   * the time a couple of transfers take — past that, something else is wrong
+   * and the user should see it.
+   */
+  protected static readonly MAX_CAPACITY_WAITS = 4;
+  protected static readonly CAPACITY_WAIT_MS = 1500;
+
   protected queue: QueueItem[] = [];
   protected dragging = false;
   protected submitting = false;
@@ -310,7 +356,10 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
                         {item.width}×{item.height}
                       </span>
                     )}
-                    {item.status === 'uploading' && <span>{item.progress}%</span>}
+                    {item.status === 'uploading' && !item.waitingForCapacity && <span>{item.progress}%</span>}
+                    {item.status === 'uploading' && item.waitingForCapacity && (
+                      <span>{app.translator.trans('lcoy-waterfall.forum.upload_modal.waiting_capacity')}</span>
+                    )}
                     {item.status === 'done' && (
                       <span className="WaterfallUploadModal-itemDone">
                         <i className="fas fa-check" aria-hidden="true" />
@@ -318,7 +367,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
                     )}
                     {item.status === 'error' && <span className="WaterfallUploadModal-itemError">{item.error}</span>}
                   </div>
-                  {(item.status === 'uploading' || item.status === 'done') && (
+                  {(item.status === 'uploading' || item.status === 'done') && !item.waitingForCapacity && (
                     <div className="WaterfallUploadModal-progress">
                       <div className="WaterfallUploadModal-progressBar" style={{ width: `${item.progress}%` }} />
                     </div>
@@ -756,13 +805,66 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
       });
   }
 
-  protected uploadItem(item: QueueItem): Promise<void> {
+  /**
+   * Transfer one item, waiting out the uploader's own capacity when the server
+   * says it is full.
+   *
+   * A batch upload races the per-user concurrency limit: the modal sends the
+   * next file as soon as the previous request returns, while the transfers
+   * behind it are still running, so the fourth or fifth file can arrive while
+   * the maximum number of images is in flight. That is a temporary condition
+   * rather than a failure, and the wait belongs here — inside the promise the
+   * serial chain awaits — so the next file still cannot start until this one
+   * has settled, and nothing has to be retried by hand.
+   */
+  protected async uploadItem(item: QueueItem): Promise<void> {
     const set = this.set;
 
     if (!set) {
-      return Promise.resolve();
+      return;
     }
 
+    for (let attempt = 0; ; attempt++) {
+      const outcome = await this.sendItem(item, set);
+
+      if (outcome !== 'capacity') {
+        return;
+      }
+
+      if (attempt >= WaterfallUploadModal.MAX_CAPACITY_WAITS) {
+        // Out of patience: the file was never transferred, and leaving it on
+        // 'uploading' would hide that — the row would sit at 0% forever, the
+        // run would never report itself finished, and the one thing the user
+        // could do about it (retry) would never be offered.
+        item.waitingForCapacity = false;
+        item.status = 'error';
+        item.progress = 0;
+        item.error = extractText(app.translator.trans('lcoy-waterfall.api.errors.concurrency_limit'));
+        m.redraw();
+
+        return;
+      }
+
+      item.waitingForCapacity = true;
+      m.redraw();
+
+      await new Promise((resolve) => setTimeout(resolve, WaterfallUploadModal.CAPACITY_WAIT_MS * (attempt + 1)));
+
+      item.waitingForCapacity = false;
+
+      // A cancel during the wait already put the item back to 'ready'.
+      if (item.cancelled) {
+        return;
+      }
+    }
+  }
+
+  /**
+   * One attempt at sending an item, resolving with what came of it: 'done',
+   * 'capacity' (the server refused for no reason other than this uploader's
+   * own in-flight images), 'failed', or 'aborted'.
+   */
+  protected sendItem(item: QueueItem, set: WaterfallSet): Promise<'done' | 'capacity' | 'failed' | 'aborted'> {
     return new Promise((resolve) => {
       const body = new FormData();
 
@@ -789,6 +891,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
       item.status = 'uploading';
       item.progress = 0;
       item.error = null;
+      item.waitingForCapacity = false;
 
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
@@ -812,22 +915,27 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
             this.setAdded = true;
             state.addUploadedSet(set);
           }
-        } else {
-          item.status = 'error';
-          item.progress = 0;
 
-          try {
-            const payload = JSON.parse(xhr.responseText);
-            const errors = payload?.errors?.[0]?.detail || payload?.errors?.[0]?.title;
+          m.redraw();
+          resolve('done');
 
-            item.error = typeof errors === 'string' ? errors : `HTTP ${xhr.status}`;
-          } catch {
-            item.error = `HTTP ${xhr.status}`;
-          }
+          return;
         }
 
+        if (isCapacityRejection(xhr.responseText)) {
+          // Left on 'uploading': the caller is about to wait and send again.
+          m.redraw();
+          resolve('capacity');
+
+          return;
+        }
+
+        item.status = 'error';
+        item.progress = 0;
+        item.error = readErrorDetail(xhr);
+
         m.redraw();
-        resolve();
+        resolve('failed');
       };
 
       xhr.onerror = () => {
@@ -836,14 +944,14 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
         item.progress = 0;
         item.error = extractText(app.translator.trans('core.lib.error.network_error_message'));
         m.redraw();
-        resolve();
+        resolve('failed');
       };
 
       // Aborting must resolve the promise too, or the sequential upload
       // chain in submit() would hang forever after a cancel.
       xhr.onabort = () => {
         item.xhr = null;
-        resolve();
+        resolve('aborted');
       };
 
       xhr.open('POST', `${app.forum.attribute('apiUrl')}/waterfall-images`);

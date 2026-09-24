@@ -59,6 +59,7 @@ lcoy-waterfall:
       choose_files: "Choose files"
       drop_here: "Drag and drop images here"
       uploading: "Uploading {done}/{total}…"
+      waiting_capacity: "Waiting for the images already processing…"
       overall_progress: "Overall progress"
       retry: "Retry"
       cancel: "Cancel"

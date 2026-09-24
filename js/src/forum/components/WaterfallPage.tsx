@@ -196,13 +196,20 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
     // previous open/close carries an older epoch and is discarded below.
     const epoch = ++this.lightboxEpoch;
 
-    // `===`, deliberately not `>=`: the count is the set's published images
-    // while the uploader's own in-memory list is longer (it also holds their
-    // failed ones). Reading that as "complete" would skip the refetch and, for
-    // a set past the include cap, leave the uploader's own images unreachable
-    // behind a shortcut. One redundant refetch is the safe side of that trade.
+    // `imagesCount` counts the set's *published* images, which is exactly what
+    // everyone but the uploader can see and only a lower bound for the
+    // uploader — their own pending and failed images are visible to them
+    // alone. So the count can vouch for a list being complete only when the
+    // viewer is provably not the author: a guest, or a signed-in user whose id
+    // differs from the set's owner. Anything else, including a payload that
+    // did not carry the author, refetches: that is always safe, whereas
+    // trusting the count there would hide the images the uploader just added.
+    const viewer = app.session.user;
+    const owner = set.user();
+    const countVouches = !viewer || (!!owner && owner.id() !== viewer.id());
+
     const loaded = this.setImages(set);
-    const complete = loaded.length > 0 && loaded.length === set.imagesCount();
+    const complete = countVouches && loaded.length > 0 && loaded.length === set.imagesCount();
 
     this.openSet = set;
     this.openSetIndex = 0;
@@ -227,6 +234,17 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
 
         this.openSetImages = images.slice();
         this.openSetLoadedCount = images.length;
+
+        // Only a page that came back from the server can prove the set is
+        // whole: the in-memory copy may simply predate the images the feed has
+        // not seen yet, and believing a stale length would leave the uploader
+        // looking at a set that never grows. The include is capped at the same
+        // page size the lightbox pages with, so a shorter answer is the whole
+        // set — and for the uploader this is the only proof available at all,
+        // since the published count says nothing about their own images.
+        if (!complete && images.length < WaterfallPage.IMAGES_PAGE) {
+          this.openSetExhausted = true;
+        }
       })
       .catch((error: unknown) => {
         // A failure of a set the user has already navigated away from must not
@@ -315,15 +333,15 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
     // onto whatever set is open now.
     const epoch = this.lightboxEpoch;
 
-    // `imagesCount` is the set's *published* images, while this endpoint hands
-    // back whatever the viewer may see — the uploader's own list also carries
-    // their failed and processing ones, so their two numbers do not line up.
-    // The comparison is therefore only a cheap shortcut, and the real
-    // terminator is the short page further down, which depends on nothing but
-    // what the endpoint actually returned. It has to be: a guard that can never
-    // be satisfied would leave every redraw asking for another page, and the
-    // empty page would leave the count exactly where it started.
-    if (!set || this.loadingMoreImages || this.openSetExhausted || this.openSetImages.length === 0 || this.openSetLoadedCount >= set.imagesCount()) {
+    // What ends pagination is the short page further down, and nothing else:
+    // the count is the set's published images while this endpoint hands back
+    // whatever the viewer may see, so for the uploader — whose own pending and
+    // failed images are visible to them alone — comparing the two would stop
+    // the lightbox early and hide images they had just uploaded. (A guard that
+    // could never be satisfied is the other half of that coin: every redraw
+    // would ask for another page and the empty answer would leave the count
+    // exactly where it started.)
+    if (!set || this.loadingMoreImages || this.openSetExhausted || this.openSetImages.length === 0) {
       return;
     }
 

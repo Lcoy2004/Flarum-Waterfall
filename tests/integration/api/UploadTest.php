@@ -135,6 +135,41 @@ class UploadTest extends TestCase
         $this->assertEquals('mock image host unavailable', $log->error);
     }
 
+    /**
+     * A full upload capacity is reported under a stable `source.pointer`. The
+     * upload modal reads that pointer to tell "the server is busy with this
+     * uploader's own earlier files, wait and send it again" apart from a real
+     * failure, so it is a contract between the two sides — and it cannot be
+     * matched on the message, which is translated.
+     */
+    #[Test]
+    public function a_full_upload_capacity_is_reported_under_a_stable_marker()
+    {
+        $this->settings['lcoy-waterfall.user_concurrent_uploads'] = 1;
+
+        $this->prepareDatabase([
+            WaterfallImage::class => [
+                ['id' => 7, 'user_id' => 2, 'src' => '', 'thumb' => null, 'title' => 'In flight', 'likes_count' => 0, 'views_count' => 0, 'score' => 0, 'status' => WaterfallImage::STATUS_PENDING, 'created_at' => Carbon::now(), 'updated_at' => Carbon::now()],
+            ],
+        ]);
+
+        $container = $this->app()->getContainer();
+
+        $container->instance(ExternalImageHostUploader::class, $this->mockUploader('/file/mock-upload.png'));
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                ->withUploadedFiles(['file' => $this->pngUpload()])
+                ->withParsedBody(['title' => 'One too many'])
+        );
+
+        $this->assertEquals(422, $response->getStatusCode());
+
+        $errors = json_decode($response->getBody(), true)['errors'];
+
+        $this->assertEquals('/data/attributes/upload_capacity', $errors[0]['source']['pointer']);
+    }
+
     #[Test]
     public function upload_rejects_disallowed_mime_type()
     {

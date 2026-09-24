@@ -98,41 +98,85 @@ class RecordViewsController implements RequestHandlerInterface
             return new JsonResponse(['counted' => 0]);
         }
 
-        $this->applyCounters(array_keys($counted), $setDeltas);
+        $applied = $this->applyCounters(array_keys($counted), array_keys($setDeltas));
         $this->queueRecalculations($images, $counted);
 
-        return new JsonResponse(['counted' => count($counted)]);
+        // The window above is what the client asked to count; `$applied` is
+        // what actually reached the rows, and the two differ only when an
+        // image was deleted in between.
+        return new JsonResponse(['counted' => $applied]);
     }
 
     /**
      * Move the counters in as few statements as the invariants allow.
      *
-     * Images: one statement for the whole batch — every counted row gains
-     * exactly one. Sets: their totals are deltas on top of the images, so each
-     * set needs its own amount, but the row lock the single-image path takes
-     * per view is taken once per set here, in id order so two batches touching
-     * the same sets cannot deadlock each other. A set that vanished (its last
-     * image was deleted) is skipped, exactly as the single view would skip it.
+     * The locks are taken in the order the single-image path takes them —
+     * the set's row first, then the image's — because the two orders are the
+     * two halves of a deadlock: a batch holding image locks while it waits for
+     * a set lock, against a single view that holds that set lock while it
+     * waits for the image. Both paths are live at once (a browser running the
+     * previous bundle still posts single views), and a deadlock here costs the
+     * whole batch: the per-IP window is consumed above, so the views are gone
+     * rather than merely delayed.
+     *
+     * Sets are locked in id order so two batches sharing sets cannot deadlock
+     * each other either.
      *
      * @param  int[]  $imageIds
-     * @param  array<int, int>  $setDeltas  set id => counted views
+     * @param  int[]  $setIds  the sets the first read put them in, locked in
+     *                         ascending id order
+     *
+     * @return int how many images actually gained a view
      */
-    protected function applyCounters(array $imageIds, array $setDeltas): void
+    protected function applyCounters(array $imageIds, array $setIds): int
     {
         $connection = (new WaterfallImage)->getConnection();
 
-        $connection->transaction(function () use ($imageIds, $setDeltas) {
-            WaterfallImage::query()->whereIn('id', $imageIds)->increment('views_count');
+        sort($setIds);
 
-            ksort($setDeltas);
+        return $connection->transaction(function () use ($imageIds, $setIds) {
+            $lockedSets = [];
 
-            foreach ($setDeltas as $setId => $delta) {
-                if (WaterfallSet::query()->lockForUpdate()->find($setId) === null) {
-                    continue;
+            foreach ($setIds as $setId) {
+                // A set that vanished (its last image was deleted) is skipped,
+                // exactly as the single view would skip it.
+                if (WaterfallSet::query()->lockForUpdate()->find($setId) !== null) {
+                    $lockedSets[$setId] = true;
                 }
+            }
 
+            // Read the images again under their own locks: what gains a view
+            // has to be what this transaction can still see. An image deleted
+            // since the first read would otherwise add one to its set without
+            // gaining one itself — a total that stays ahead of the rows it
+            // sums until the next aggregate sync.
+            $surviving = WaterfallImage::query()
+                ->whereIn('id', $imageIds)
+                ->where('status', WaterfallImage::STATUS_PUBLISHED)
+                ->lockForUpdate()
+                ->get(['id', 'set_id']);
+
+            if ($surviving->isEmpty()) {
+                return 0;
+            }
+
+            // One statement for the whole batch — every surviving row gains
+            // exactly one.
+            WaterfallImage::query()->whereIn('id', $surviving->modelKeys())->increment('views_count');
+
+            $deltas = [];
+
+            foreach ($surviving as $image) {
+                if ($image->set_id && isset($lockedSets[$image->set_id])) {
+                    $deltas[$image->set_id] = ($deltas[$image->set_id] ?? 0) + 1;
+                }
+            }
+
+            foreach ($deltas as $setId => $delta) {
                 WaterfallSet::query()->whereKey($setId)->increment('views_count', $delta);
             }
+
+            return $surviving->count();
         });
     }
 
