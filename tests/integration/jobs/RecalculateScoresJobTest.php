@@ -14,6 +14,7 @@ namespace Lcoy\Waterfall\Tests\integration\jobs;
 use Carbon\Carbon;
 use Flarum\Testing\integration\TestCase;
 use Flarum\User\User;
+use Illuminate\Contracts\Queue\Queue;
 use Lcoy\Waterfall\Jobs\RecalculateScoresJob;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallSet;
@@ -94,7 +95,11 @@ class RecalculateScoresJobTest extends TestCase
     protected function runJob(array $imageIds): void
     {
         (new RecalculateScoresJob($imageIds))->handle(
-            $this->app()->getContainer()->make(ScoreCalculatorInterface::class)
+            $this->app()->getContainer()->make(ScoreCalculatorInterface::class),
+            // The queue is only touched when a batch is long enough to be split
+            // (MAX_IMAGES_PER_JOB); under the sync driver any remainder runs
+            // inline, which is exactly what these tests then observe.
+            $this->app()->getContainer()->make(Queue::class)
         );
     }
 }

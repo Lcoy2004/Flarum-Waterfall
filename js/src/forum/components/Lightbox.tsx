@@ -75,8 +75,15 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
    * Live prefetch requests. They are kept referenced only so the browser
    * cannot collect an <img> whose download is still in flight (a dropped
    * element aborts its request), and released when the lightbox closes.
+   *
+   * Only the most recent few are worth holding on to: a download started three
+   * images ago has long since finished, and a reader paging through a long set
+   * would otherwise accumulate one element per prefetch for the whole session.
    */
   protected prefetchHandles: HTMLImageElement[] = [];
+
+  /** How many prefetch downloads to keep alive at once. */
+  protected static readonly PREFETCH_HANDLES_KEPT = 6;
 
   oncreate(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
     super.oncreate(vnode);
@@ -197,8 +204,13 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
    * retried — counting views is best-effort (the same `.catch(() => {})` the
    * per-image request had), and the server counts at most one view per IP per
    * image per minute regardless.
+   *
+   * $leaving marks the flushes that run because the page is going away. Those
+   * cannot rely on an XHR, which the browser aborts as the document is torn
+   * down; a beacon is what survives that, and the CSRF token rides in the body
+   * (Flarum parses it before it checks the token).
    */
-  protected static flushViews(): void {
+  protected static flushViews(leaving = false): void {
     if (Lightbox.viewFlushTimer !== null) {
       clearTimeout(Lightbox.viewFlushTimer);
       Lightbox.viewFlushTimer = null;
@@ -212,10 +224,22 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
 
     Lightbox.pendingViews.clear();
 
+    const url = `${app.forum.attribute('apiUrl')}/waterfall-images/views`;
+
+    if (leaving) {
+      const body = new Blob([JSON.stringify({ ids, csrfToken: app.session.csrfToken })], { type: 'application/json' });
+
+      // A false return means the browser refused to queue it, so the request
+      // below still gets its chance.
+      if (navigator.sendBeacon?.(url, body)) {
+        return;
+      }
+    }
+
     app
       .request({
         method: 'POST',
-        url: `${app.forum.attribute('apiUrl')}/waterfall-images/views`,
+        url,
         body: { ids },
       })
       .catch(() => {});
@@ -242,11 +266,11 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
-        Lightbox.flushViews();
+        Lightbox.flushViews(true);
       }
     });
 
-    document.addEventListener('pagehide', () => Lightbox.flushViews());
+    document.addEventListener('pagehide', () => Lightbox.flushViews(true));
   }
 
   protected keydownHandler = (e: KeyboardEvent) => {
@@ -338,6 +362,10 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
       handle.src = url;
       this.prefetchHandles.push(handle);
     }
+
+    if (this.prefetchHandles.length > Lightbox.PREFETCH_HANDLES_KEPT) {
+      this.prefetchHandles = this.prefetchHandles.slice(-Lightbox.PREFETCH_HANDLES_KEPT);
+    }
   }
 
   protected zoomBy(delta: number): void {
@@ -362,7 +390,18 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
 
     if (this.pointers.size === 1) {
       this.pointerStart = { x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
-    } else if (this.pointers.size === 2) {
+
+      return;
+    }
+
+    // A second finger makes this a pinch, not a swipe: the press being tracked
+    // stops being a swipe candidate, because the release that ends a two-finger
+    // pan is measured from wherever the first finger happened to land and reads
+    // as a decisive horizontal flick. A finger left over after the pinch is
+    // re-recorded in onPointerUp instead.
+    this.pointerStart = null;
+
+    if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
       this.pinchStart = { distance: Math.hypot(a.x - b.x, a.y - b.y), scale: this.scale };
     }
@@ -392,6 +431,15 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
 
     if (this.pointers.size < 2) {
       this.pinchStart = null;
+    }
+
+    if (this.pointers.size === 1) {
+      // One finger left after a pinch: track it as a fresh press, so panning
+      // continues from where the finger actually is instead of jumping back to
+      // the coordinates of the press that started the whole gesture.
+      const [remaining] = [...this.pointers.values()];
+
+      this.pointerStart = { x: remaining.x, y: remaining.y, panX: this.panX, panY: this.panY };
     }
 
     if (this.pointers.size === 0) {

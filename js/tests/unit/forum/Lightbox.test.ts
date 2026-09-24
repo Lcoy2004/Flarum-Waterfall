@@ -45,6 +45,10 @@ function recordRequests(): any[] {
   const calls: any[] = [];
 
   (app as any).forum = { attribute: (key: string) => (key === 'apiUrl' ? '/api' : undefined) };
+  // Inside the forum app the session always carries a token: the beacon path
+  // needs it, because a request sent on the way out of the page has no header
+  // to put it in and Flarum reads it from the body instead.
+  (app as any).session = { csrfToken: 'test-token' };
   (app as any).request = (options: unknown) => {
     calls.push(options);
 
@@ -115,11 +119,42 @@ describe('Lightbox view reporting', () => {
     expect(calls).toHaveLength(0);
 
     // A page going into the back/forward cache is frozen; this is the last
-    // moment a request can still leave.
+    // moment a request can still leave. jsdom has no beacon, so this is the
+    // fallback path.
     document.dispatchEvent(new Event('pagehide'));
 
     expect(calls).toHaveLength(1);
     expect(calls[0].body).toEqual({ ids: ['hide-a'] });
+  });
+
+  it('sends a beacon rather than a request when the page is being left', () => {
+    const calls = recordRequests();
+    const beacons: { url: string; body: Blob }[] = [];
+    const original = (navigator as any).sendBeacon;
+
+    (navigator as any).sendBeacon = (url: string, body: Blob) => {
+      beacons.push({ url, body });
+
+      return true;
+    };
+
+    try {
+      const lightbox = openLightbox([makeImage('beacon-a')]);
+
+      (lightbox as any).reportView();
+
+      document.dispatchEvent(new Event('pagehide'));
+
+      // An XHR would be aborted with the document, which is the whole reason
+      // the beacon exists; the token travels in the body because there is no
+      // request left to carry the header.
+      expect(calls).toHaveLength(0);
+      expect(beacons).toHaveLength(1);
+      expect(beacons[0].url).toBe('/api/waterfall-images/views');
+      expect(beacons[0].body.type).toBe('application/json');
+    } finally {
+      (navigator as any).sendBeacon = original;
+    }
   });
 
   it('prefetches across the end of the set, the way navigation wraps', () => {

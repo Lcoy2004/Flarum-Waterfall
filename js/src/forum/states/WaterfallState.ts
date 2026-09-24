@@ -343,15 +343,22 @@ export default class WaterfallState {
       return;
     }
 
+    // The call comes first and the flag after it, because store.find() can
+    // throw synchronously: a flag left set by that would mute every later poll
+    // — and the visibility handler with it — for the rest of the page's life,
+    // leaving the cards stuck on "processing" with nothing left to resolve
+    // them.
+    //
+    // Without the slideshow include: while a set is pending there are no
+    // published images to return, so it would only cost the server the
+    // queries that load the relation. The sets that actually publish get
+    // their images from backfillSlideshows instead — one extra request per
+    // upload, rather than that cost on every poll.
+    const request = app.store.find<WaterfallSet[]>('waterfall-sets', ids, { include: this.pollInclude });
+
     this.refreshing = true;
 
-    app.store
-      // Without the slideshow include: while a set is pending there are no
-      // published images to return, so it would only cost the server the
-      // queries that load the relation. The sets that actually publish get
-      // their images from backfillSlideshows instead — one extra request per
-      // upload, rather than that cost on every poll.
-      .find<WaterfallSet[]>('waterfall-sets', ids, { include: this.pollInclude })
+    request
       .then(() => {
         // The store mutated the pending models in place (status and cover).
         this.touch();

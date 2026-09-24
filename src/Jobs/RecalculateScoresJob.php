@@ -12,6 +12,7 @@
 namespace Lcoy\Waterfall\Jobs;
 
 use Flarum\Queue\AbstractJob;
+use Illuminate\Contracts\Queue\Queue;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallSet;
 use Lcoy\Waterfall\Recommend\ScoreCalculatorInterface;
@@ -36,6 +37,20 @@ use Lcoy\Waterfall\Recommend\ScoreCalculatorInterface;
 class RecalculateScoresJob extends AbstractJob
 {
     /**
+     * How many images one delivery may re-score; a longer batch is processed
+     * across several deliveries, the remainder being queued as its own job.
+     *
+     * Flarum builds its database queue with a hardcoded retry_after of 60
+     * seconds, so a job still running past that is read as abandoned and handed
+     * to a second worker — which here would only redo the same work (scores are
+     * written as absolute values), but it would hold the worker and delay
+     * everything queued behind it while it did. What a delivery costs is
+     * dominated by the sets: each one takes a row lock and re-reads its images,
+     * so a hundred arriving at once is a hundred locks and a hundred reads.
+     */
+    protected const MAX_IMAGES_PER_JOB = 25;
+
+    /**
      * @param  int[]  $imageIds
      */
     public function __construct(
@@ -44,9 +59,22 @@ class RecalculateScoresJob extends AbstractJob
         parent::__construct();
     }
 
-    public function handle(ScoreCalculatorInterface $calculator): void
+    public function handle(ScoreCalculatorInterface $calculator, Queue $queue): void
     {
-        $images = WaterfallImage::query()->whereIn('id', $this->imageIds)->get();
+        $ids = $this->imageIds;
+        $overflow = array_slice($ids, static::MAX_IMAGES_PER_JOB);
+
+        if ($overflow !== []) {
+            $ids = array_slice($ids, 0, static::MAX_IMAGES_PER_JOB);
+
+            // The rest goes back on the queue as a delivery of its own: a batch
+            // that arrived as one burst (a lightbox page) is still scored
+            // whole, just across several bounded deliveries rather than one
+            // unbounded one.
+            $queue->push(new static($overflow));
+        }
+
+        $images = WaterfallImage::query()->whereIn('id', $ids)->get();
 
         // Every image was deleted between queueing and execution (a like
         // immediately followed by a delete, say): re-scoring is a no-op, not a
