@@ -104,12 +104,22 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
   /**
    * How long an item waits for the uploader's own in-flight images to finish,
    * and how many times it asks again before giving up and offering the manual
-   * retry. The wait grows with each attempt, and the whole budget stays inside
-   * the time a couple of transfers take — past that, something else is wrong
-   * and the user should see it.
+   * retry.
+   *
+   * The wait ends when a transfer completes, and one transfer is two requests
+   * to an external host that is allowed up to `upload_timeout` (30s) each — so
+   * the budget has to cover the slow end of that, not the quick one. It used to
+   * stop after four attempts, 15 seconds in all, which an ordinary batch
+   * against a slow host runs out while the condition is still temporary: the
+   * file was never rejected, it just had not had its turn yet, and the user was
+   * handed a failure to retry by hand.
+   *
+   * The interval grows up to a ceiling instead of growing without bound, so a
+   * long wait keeps asking often enough to take a slot the moment one appears.
    */
-  protected static readonly MAX_CAPACITY_WAITS = 4;
+  protected static readonly MAX_CAPACITY_WAITS = 20;
   protected static readonly CAPACITY_WAIT_MS = 1500;
+  protected static readonly CAPACITY_WAIT_MAX_MS = 5000;
 
   protected queue: QueueItem[] = [];
   protected dragging = false;
@@ -848,7 +858,9 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
       item.waitingForCapacity = true;
       m.redraw();
 
-      await new Promise((resolve) => setTimeout(resolve, WaterfallUploadModal.CAPACITY_WAIT_MS * (attempt + 1)));
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(WaterfallUploadModal.CAPACITY_WAIT_MS * (attempt + 1), WaterfallUploadModal.CAPACITY_WAIT_MAX_MS))
+      );
 
       item.waitingForCapacity = false;
 

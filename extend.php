@@ -119,7 +119,19 @@ return [
         ->default('lcoy-waterfall.max_size_mb', 10)
         ->default('lcoy-waterfall.user_hourly_limit', 20)
         ->default('lcoy-waterfall.global_per_minute_limit', 60)
-        ->default('lcoy-waterfall.user_concurrent_uploads', 3)
+        // Sized for a batch, not for a single file: the upload modal lets one
+        // person select several images at once and sends them one after
+        // another, and each image keeps its row here only until the queue
+        // worker has transferred it. At the old default of 3 the fourth file of
+        // an ordinary batch was refused while the first three were still
+        // uploading — the dialog advertised multi-file uploads and the server
+        // rejected them part-way through.
+        //
+        // What this bounds is spool disk (the staged copies, one per pending
+        // image) and how much work one account can have queued; the image host
+        // is protected by global_per_minute_limit and abuse by
+        // user_hourly_limit, so neither needs this number to be small.
+        ->default('lcoy-waterfall.user_concurrent_uploads', 10)
         ->default('lcoy-waterfall.upload_timeout', 30)
         ->default('lcoy-waterfall.weight_likes', 1.0)
         ->default('lcoy-waterfall.weight_views', 0.3)
