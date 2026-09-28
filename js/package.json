@@ -1,7 +1,7 @@
 {
     "private": true,
     "name": "@lcoy/flarum-ext-waterfall",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "prettier": "@flarum/prettier-config",
     "dependencies": {},
     "devDependencies": {
