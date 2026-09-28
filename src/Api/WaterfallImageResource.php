@@ -215,7 +215,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
                         $counted = $this->cache->add(
                             'lcoy-waterfall.view.'.md5($ip).'.'.$image->id,
                             1,
-                            60
+                            WaterfallImage::VIEW_WINDOW_SECONDS
                         );
 
                         if ($counted) {
@@ -227,7 +227,7 @@ class WaterfallImageResource extends AbstractDatabaseResource
                             // image per minute keeps the queue bounded; the
                             // score is recomputed from the live counters, so
                             // nothing is lost.
-                            if ($this->cache->add('lcoy-waterfall.score.'.$image->id, 1, 60)) {
+                            if ($this->cache->add('lcoy-waterfall.score.'.$image->id, 1, WaterfallImage::VIEW_WINDOW_SECONDS)) {
                                 $this->queue->push(new RecalculateScoresJob([$image->id]));
                             }
                         }

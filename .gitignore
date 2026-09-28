@@ -16,9 +16,6 @@
 /tests/.phpunit.cache/
 /tests/.tmp/
 
-# Local artifacts that are not part of the package.
-/wf_test_upload.png
-
 # Editor / OS noise
 .idea/
 .vscode/

@@ -21,6 +21,17 @@ class WaterfallImage extends AbstractModel
 {
     use HasPublishStatus;
 
+    /**
+     * One counted view per IP per image per minute.
+     *
+     * Shared by the single-image and the batch view endpoints: the lightbox
+     * posts to one or the other depending on the bundle it is running, and the
+     * two have to count identically. The same window coalesces the score
+     * recalculation, so a popular image enqueues one job per minute rather
+     * than one per view.
+     */
+    public const VIEW_WINDOW_SECONDS = 60;
+
     protected $table = 'waterfall_images';
 
     // Flarum's AbstractModel disables timestamps by default; this model needs

@@ -198,7 +198,7 @@ All keys are namespaced with `lcoy-waterfall.`.
 | `mime_whitelist`          | `jpg,jpeg,png,gif,webp`      | Allowed formats, matched against sniffed magic bytes                    |
 | `max_size_mb`             | `10`                         | Maximum upload size in megabytes                                        |
 | `user_hourly_limit`       | `20`                         | Maximum uploads per user per hour (`0` disables)                        |
-| `user_concurrent_uploads` | `3`                          | Maximum uploads left pending per user (`0` disables)                    |
+| `user_concurrent_uploads` | `10`                         | Maximum uploads left pending per user (`0` disables)                    |
 | `global_per_minute_limit` | `60`                         | Site-wide transfers per minute; over-quota jobs are deferred, not dropped |
 | `upload_timeout`          | `30`                         | Transfer timeout in seconds                                             |
 | `per_page`                | `24`                         | **Sets** per feed page (1–100)                                          |
@@ -207,6 +207,7 @@ All keys are namespaced with `lcoy-waterfall.`.
 | `show_like_button`        | `true`                       | Show the like button in the lightbox                                    |
 | `slideshow_images`        | `3`                          | Images per card slideshow; `0` or `1` disables it (cover only)           |
 | `poll_interval`           | `5`                          | Frontend poll interval for pending uploads, in seconds                  |
+| `description`             | `""`                         | Page intro under the heading; hidden when empty                        |
 | `local_relay`             | `false`                      | Keep a copy of each upload in `storage/waterfall-relay` for auditing    |
 
 The MIME check reads the file's magic bytes, never the client-supplied type or
@@ -235,8 +236,9 @@ recalculation per image per minute.
 
 ## API
 
-Two JSON:API resources back the feature: `waterfall-sets` (the feed) and
-`waterfall-images` (the individual pictures).
+Three JSON:API resources back the feature: `waterfall-sets` (the feed),
+`waterfall-images` (the individual pictures) and `waterfall-upload-logs` (the
+admin transfer log).
 
 ### `waterfall-sets`
 
@@ -315,7 +317,7 @@ yarn install
 yarn build          # production bundle → js/dist/forum.js, js/dist/admin.js
 yarn dev            # development build with a watcher
 yarn check-typings  # tsc --noEmit
-yarn format-check   # prettier --check src
+yarn format-check   # prettier --check src tests
 yarn test           # Jest unit tests
 ```
 
@@ -342,6 +344,7 @@ the extension of the file does not matter. WebP and HEIC are common surprises.
 
 **An image fails with one of these error codes (visible in the upload log)**
 `image_host_not_configured` (upload URL empty or invalid),
+`image_host_timeout` (the transfer budget ran out before the host answered),
 `image_host_http_error` (non-200), `image_host_invalid_response` (response was
 not JSON), `image_host_missing_src` (no `src` key),
 `image_host_unreachable` (network/TLS failure after 3 attempts),
@@ -354,9 +357,9 @@ queue workers.
 
 **A forum-facing setting changed but the frontend still shows the old value**
 Settings serialized to the forum (`per_page`, `card_radius`, `card_gutter`,
-`show_like_button`, `slideshow_images`, `poll_interval`) clear the JS cache when
-saved through the admin UI. If you changed one directly in the database, run
-`php flarum cache:clear`.
+`show_like_button`, `slideshow_images`, `poll_interval`, `mime_whitelist`,
+`description`) clear the JS cache when saved through the admin UI. If you
+changed one directly in the database, run `php flarum cache:clear`.
 
 **Build fails with "No JS entrypoints could be found"**
 `flarum-webpack-config` expects `js/forum.ts` and `js/admin.ts` to exist.
@@ -537,7 +540,7 @@ curl -X POST "https://img.example.com/api/v1/upload" \
 | `mime_whitelist`          | `jpg,jpeg,png,gif,webp`      | 允许的格式,按嗅探到的魔数匹配                                   |
 | `max_size_mb`             | `10`                         | 单文件最大体积(MB)                                             |
 | `user_hourly_limit`       | `20`                         | 每用户每小时上传上限(`0` 表示不限制)                            |
-| `user_concurrent_uploads` | `3`                          | 每用户同时处于 pending 的上传上限(`0` 表示不限制)               |
+| `user_concurrent_uploads` | `10`                         | 每用户同时处于 pending 的上传上限(`0` 表示不限制)               |
 | `global_per_minute_limit` | `60`                         | 全站每分钟转存次数;超配额的任务会延迟而非丢弃                   |
 | `upload_timeout`          | `30`                         | 转存超时(秒)                                                   |
 | `per_page`                | `24`                         | 瀑布流每页**集**数(1–100)                                      |
@@ -546,6 +549,7 @@ curl -X POST "https://img.example.com/api/v1/upload" \
 | `show_like_button`        | `true`                       | 是否在灯箱显示点赞按钮                                          |
 | `slideshow_images`        | `3`                          | 卡片幻灯片图片数;`0` 或 `1` 表示关闭(只显示封面)                |
 | `poll_interval`           | `5`                          | 前台轮询 pending 状态的间隔(秒)                                 |
+| `description`             | `""`                         | 瀑布流标题下方居中的简介;留空则不显示                         |
 | `local_relay`             | `false`                      | 转存后在 `storage/waterfall-relay` 保留一份副本以便审计         |
 
 MIME 校验读取文件魔数,不信任客户端提供的类型或扩展名,因此把可执行文件改名为
@@ -570,8 +574,8 @@ score = weight_likes   * log10(1 + likes_count)
 
 ## API
 
-由两个 JSON:API 资源支撑:`waterfall-sets`(瀑布流主体)与
-`waterfall-images`(单张图片)。
+由三个 JSON:API 资源支撑:`waterfall-sets`(瀑布流主体)、
+`waterfall-images`(单张图片)与 `waterfall-upload-logs`(管理端转存日志)。
 
 ### `waterfall-sets`
 
@@ -646,7 +650,7 @@ yarn install
 yarn build          # 生产构建 → js/dist/forum.js、js/dist/admin.js
 yarn dev            # 开发构建并监听
 yarn check-typings  # tsc --noEmit
-yarn format-check   # prettier --check src
+yarn format-check   # prettier --check src tests
 yarn test           # Jest 单元测试
 ```
 
@@ -671,7 +675,8 @@ composer test         # 运行集成测试
 HEIC 是最常被忽略的情况。
 
 **图片失败并带有以下错误码(见上传日志)**
-`image_host_not_configured`(上传地址为空或非法)、`image_host_http_error`(非 200)、
+`image_host_not_configured`(上传地址为空或非法)、`image_host_timeout`
+(图床在传输预算内未响应)、`image_host_http_error`(非 200)、
 `image_host_invalid_response`(响应不是 JSON)、`image_host_missing_src`(缺少 `src`)、
 `image_host_unreachable`(3 次尝试后网络/TLS 仍失败)、`staged_file_missing`
 (worker 执行前暂存文件已消失)、`unexpected_error`(程序缺陷,请查看 `storage/logs/`)。
@@ -681,8 +686,8 @@ HEIC 是最常被忽略的情况。
 
 **改了前台相关的设置,但页面仍是旧值**
 会被序列化到前台的设置(`per_page`、`card_radius`、`card_gutter`、`show_like_button`、
-`slideshow_images`、`poll_interval`)在后台保存时会自动清除 JS 缓存。若直接改数据库,
-请执行 `php flarum cache:clear`。
+`slideshow_images`、`poll_interval`、`mime_whitelist`、`description`)在后台保存时会
+自动清除 JS 缓存。若直接改数据库,请执行 `php flarum cache:clear`。
 
 **构建报 "No JS entrypoints could be found"**
 `flarum-webpack-config` 需要 `js/forum.ts` 与 `js/admin.ts` 存在。

@@ -67,7 +67,7 @@ class RateLimiter
             }
         }
 
-        $concurrentLimit = (int) $this->settings->get('lcoy-waterfall.user_concurrent_uploads', 3);
+        $concurrentLimit = (int) $this->settings->get('lcoy-waterfall.user_concurrent_uploads', 10);
 
         if ($concurrentLimit > 0) {
             $pending = WaterfallImage::query()

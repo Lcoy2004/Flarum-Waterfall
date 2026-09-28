@@ -45,12 +45,6 @@ class RecordViewsController implements RequestHandlerInterface
      */
     protected const MAX_IDS = 100;
 
-    /**
-     * One counted view per IP per image per minute, matching the single-image
-     * endpoint.
-     */
-    protected const VIEW_WINDOW_SECONDS = 60;
-
     public function __construct(
         protected CacheRepository $cache,
         protected Queue $queue
@@ -83,7 +77,7 @@ class RecordViewsController implements RequestHandlerInterface
         $setDeltas = [];
 
         foreach ($images as $image) {
-            if (! $this->cache->add('lcoy-waterfall.view.'.$ip.'.'.$image->id, 1, static::VIEW_WINDOW_SECONDS)) {
+            if (! $this->cache->add('lcoy-waterfall.view.'.$ip.'.'.$image->id, 1, WaterfallImage::VIEW_WINDOW_SECONDS)) {
                 continue;
             }
 
@@ -194,7 +188,7 @@ class RecordViewsController implements RequestHandlerInterface
         $recalculate = [];
 
         foreach ($images as $image) {
-            if (isset($counted[$image->id]) && $this->cache->add('lcoy-waterfall.score.'.$image->id, 1, static::VIEW_WINDOW_SECONDS)) {
+            if (isset($counted[$image->id]) && $this->cache->add('lcoy-waterfall.score.'.$image->id, 1, WaterfallImage::VIEW_WINDOW_SECONDS)) {
                 $recalculate[] = $image->id;
             }
         }
