@@ -9,7 +9,6 @@
  * LICENSE file that was distributed with this source code.
  */
 
-use Flarum\Api\Endpoint;
 use Flarum\Api\Resource\ForumResource;
 use Flarum\Extend;
 use Flarum\Search\Database\DatabaseSearchDriver;
@@ -23,8 +22,6 @@ use Lcoy\Waterfall\Access\WaterfallSetPolicy;
 use Lcoy\Waterfall\Content\WaterfallContent;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallSet;
-use Lcoy\Waterfall\Recommend\DefaultScoreCalculator;
-use Lcoy\Waterfall\Recommend\ScoreCalculatorInterface;
 use Lcoy\Waterfall\Search\Filter\IdFilter;
 use Lcoy\Waterfall\Search\Filter\SetFilter;
 use Lcoy\Waterfall\Search\Filter\UserFilter;

@@ -89,6 +89,62 @@ class RecalculateScoresJobTest extends TestCase
         $this->assertEquals(0, WaterfallSet::query()->find(20)->score);
     }
 
+    #[Test]
+    public function a_batch_longer_than_the_limit_is_split_into_bounded_deliveries()
+    {
+        $this->app();
+
+        // MAX_IMAGES_PER_JOB is 25. A burst of 30 (a lightbox page) must not
+        // become one unbounded delivery: it is delivered as 25 plus a second
+        // delivery carrying the remaining 5. What is being pinned is that the
+        // batch is still scored whole — bounding it may not drop images.
+        $ids = range(100, 129);
+        $now = Carbon::now()->toDateTimeString();
+
+        WaterfallImage::query()->insert(array_map(fn (int $id) => [
+            'id' => $id,
+            'user_id' => 2,
+            'set_id' => null,
+            'position' => 0,
+            'src' => "/file/b{$id}.png",
+            'thumb' => null,
+            'title' => "Image {$id}",
+            'likes_count' => 0,
+            'views_count' => 30,
+            'score' => 0,
+            'status' => 'published',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ], $ids));
+
+        $queue = $this->createMock(Queue::class);
+        $dispatched = [];
+
+        // Exactly one delivery comes back out of the job, across both runs
+        // below: the first queues the remainder, and the remainder queues
+        // nothing. That is the bound this test exists to pin, so it is asserted
+        // by the mock as well as by the assertions further down.
+        $queue->expects($this->once())->method('push')->willReturnCallback(function ($job) use (&$dispatched) {
+            $dispatched[] = $job;
+        });
+
+        $calculator = $this->app()->getContainer()->make(ScoreCalculatorInterface::class);
+
+        (new RecalculateScoresJob($ids))->handle($calculator, $queue);
+
+        // One follow-up delivery, and the first one stopped at the limit.
+        $this->assertCount(1, $dispatched);
+        $this->assertGreaterThan(0, WaterfallImage::query()->find(100)->score);
+        $this->assertEquals(0, WaterfallImage::query()->find(129)->score);
+
+        // The remainder is a delivery like any other: it scores what is left
+        // and queues nothing further, so the splitting terminates.
+        $dispatched[0]->handle($calculator, $queue);
+
+        $this->assertGreaterThan(0, WaterfallImage::query()->find(129)->score);
+        $this->assertCount(1, $dispatched);
+    }
+
     /**
      * @param  int[]  $imageIds
      */
