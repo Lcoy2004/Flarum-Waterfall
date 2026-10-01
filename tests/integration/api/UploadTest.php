@@ -13,14 +13,18 @@ namespace Lcoy\Waterfall\Tests\integration\api;
 
 use Carbon\Carbon;
 use Flarum\Group\Group;
+use Flarum\Locale\TranslatorInterface;
 use Flarum\Settings\SettingsRepositoryInterface;
 use Flarum\Testing\integration\RetrievesAuthorizedUsers;
 use Flarum\Testing\integration\TestCase;
 use Flarum\User\User;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
+use Illuminate\Contracts\Queue\Queue;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallSet;
 use Lcoy\Waterfall\Model\WaterfallUploadLog;
+use Lcoy\Waterfall\RateLimit\UploadQuota;
+use Lcoy\Waterfall\RateLimit\UploadRefusal;
 use Lcoy\Waterfall\Upload\Exception\UploadException;
 use Lcoy\Waterfall\Upload\ExternalImageHostUploader;
 use Lcoy\Waterfall\Upload\UploadResult;
@@ -255,6 +259,118 @@ class UploadTest extends TestCase
         $log = WaterfallUploadLog::query()->where('image_id', $body['data']['id'])->first();
 
         $this->assertEquals(WaterfallUploadLog::STATUS_FAILED, $log->status);
+    }
+
+    /**
+     * A staged file is only ever worth keeping for a job that is holding it, so
+     * every exit that is not a successful push has to take it back.
+     *
+     * The reachable leak is the quota refusal inside the authorising
+     * transaction — two requests from one account both pass the check that runs
+     * before staging, and the loser is refused after its files are already on
+     * disk. That is a race and not something one request can reproduce, so what
+     * this pins is the cleanup that covers it: a queue that refuses the job
+     * leaves by the same path.
+     */
+    #[Test]
+    public function an_upload_that_never_reaches_the_queue_leaves_no_staged_file()
+    {
+        $container = $this->app()->getContainer();
+
+        $container->instance(ExternalImageHostUploader::class, $this->mockUploader('/file/mock-upload.png'));
+
+        $queue = $this->createMock(Queue::class);
+        // once(): the endpoint has to have tried to hand the row off, or the
+        // cleanup below would be pinning a path the request never took.
+        $queue->expects($this->once())->method('push')->willThrowException(new \RuntimeException('queue unavailable'));
+
+        $container->instance(Queue::class, $queue);
+
+        $spool = storage_path('waterfall-tmp');
+        $before = $this->spoolContents($spool);
+
+        try {
+            $this->send(
+                $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                    ->withUploadedFiles(['file' => $this->pngUpload()])
+                    ->withParsedBody(['title' => 'Never queued'])
+            );
+        } catch (\Throwable) {
+            // The endpoint rethrows for the framework to report; the spool is
+            // what this test is about, not the response.
+        }
+
+        $this->assertEquals($before, $this->spoolContents($spool));
+
+        // And the row went with it: nothing will ever transfer it, so leaving
+        // it pending would hold one of the uploader's slots for good.
+        $this->assertEquals(0, WaterfallImage::query()->where('user_id', 2)->count());
+    }
+
+    /**
+     * The refusal that actually leaked: the authoritative check runs inside the
+     * authorising transaction, once the files are already staged, because the
+     * check the request makes first exists only to fail fast. Two requests from
+     * one account both pass that first check and the loser is refused here —
+     * holding a staged original and a staged thumbnail that no job will claim.
+     *
+     * The race cannot be run in a single request, so the quota is stubbed to
+     * refuse on its second call: what is under test is that leaving by that
+     * path takes the files back.
+     */
+    #[Test]
+    public function a_quota_refusal_after_staging_leaves_no_staged_file()
+    {
+        $container = $this->app()->getContainer();
+
+        $container->instance(ExternalImageHostUploader::class, $this->mockUploader('/file/mock-upload.png'));
+
+        $container->instance(UploadQuota::class, new class(
+            $container->make(SettingsRepositoryInterface::class),
+            $container->make(TranslatorInterface::class)
+        ) extends UploadQuota {
+            private int $checks = 0;
+
+            public function check(User $actor): ?UploadRefusal
+            {
+                // Call one is the fail-fast check taken before staging; call
+                // two is the authoritative one inside the transaction.
+                return ++$this->checks === 1
+                    ? null
+                    : new UploadRefusal(UploadQuota::POINTER_CONCURRENCY, 'Upload capacity is full.');
+            }
+        });
+
+        $spool = storage_path('waterfall-tmp');
+        $before = $this->spoolContents($spool);
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                ->withUploadedFiles(['file' => $this->pngUpload()])
+                ->withParsedBody(['title' => 'Refused after staging'])
+        );
+
+        // The marker is what the modal keys off, so the refusal is still the
+        // one it knows how to wait out.
+        $this->assertEquals(422, $response->getStatusCode());
+
+        $errors = json_decode($response->getBody(), true)['errors'];
+
+        $this->assertEquals('/data/attributes/upload_capacity', $errors[0]['source']['pointer']);
+
+        // Neither the spool nor the table keeps a trace of the refused request.
+        $this->assertEquals($before, $this->spoolContents($spool));
+        $this->assertEquals(0, WaterfallImage::query()->where('user_id', 2)->count());
+    }
+
+    /** @return string[] the file names in the staging spool */
+    protected function spoolContents(string $dir): array
+    {
+        if (! is_dir($dir)) {
+            return [];
+        }
+
+        return array_values(array_diff(scandir($dir) ?: [], ['.', '..']));
     }
 
     #[Test]

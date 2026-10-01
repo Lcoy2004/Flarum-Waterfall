@@ -305,6 +305,33 @@ class WaterfallImagesTest extends TestCase
     }
 
     /**
+     * The response is the image that was counted, so it has to carry the view
+     * it just added. The counter moves with a set-based UPDATE, which leaves
+     * the loaded model one behind the row it is about to serialize — a client
+     * reading the payload back would be told the wrong total.
+     */
+    #[Test]
+    public function the_single_view_response_carries_the_view_it_counted()
+    {
+        // Booting first: the fixtures are inserted raw, and a model touched
+        // before the container exists has no connection to resolve.
+        $this->app();
+
+        $before = WaterfallImage::query()->find(1)->views_count;
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images/1/view', ['authenticatedAs' => 2])
+        );
+
+        $this->assertEquals(200, $response->getStatusCode());
+
+        $body = json_decode($response->getBody(), true);
+
+        $this->assertEquals($before + 1, $body['data']['attributes']['viewsCount']);
+        $this->assertEquals($before + 1, WaterfallImage::query()->find(1)->views_count);
+    }
+
+    /**
      * The batch endpoint has to count exactly what the per-image one would:
      * each published id once (a repeat inside the payload is not a second
      * view), nothing for unpublished or unknown ids, and the owning set's

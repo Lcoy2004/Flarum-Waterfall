@@ -304,10 +304,10 @@ class WaterfallSetsTest extends TestCase
     }
 
     /**
-     * The view endpoint is the only writer of views_count, and the only place
-     * the set's own counter moves by a delta inside a locked transaction
-     * (recordView) — the feed and the recommendation score both read those
-     * numbers, and nothing covered the path.
+     * ViewRecorder is the only writer of views_count, and its locked
+     * transaction is the only place the set's own counter moves by a delta —
+     * the feed and the recommendation score both read those numbers, and
+     * nothing covered the path.
      */
     #[Test]
     public function a_view_is_counted_once_and_moves_its_set_with_it()

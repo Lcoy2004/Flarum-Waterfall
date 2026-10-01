@@ -18,7 +18,6 @@ use Flarum\Api\Schema;
 use Flarum\Api\Sort\SortColumn;
 use Flarum\Foundation\ValidationException;
 use Flarum\Locale\TranslatorInterface;
-use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Queue\Queue;
 use Illuminate\Database\Eloquent\Builder;
@@ -31,6 +30,7 @@ use Lcoy\Waterfall\Jobs\RecalculateScoresJob;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallImageLike;
 use Lcoy\Waterfall\Model\WaterfallSet;
+use Lcoy\Waterfall\View\ViewRecorder;
 use Tobyz\JsonApiServer\Context;
 
 /**
@@ -45,8 +45,8 @@ class WaterfallImageResource extends AbstractDatabaseResource
     public function __construct(
         protected Dispatcher $events,
         protected Queue $queue,
-        protected CacheRepository $cache,
-        protected TranslatorInterface $translator
+        protected TranslatorInterface $translator,
+        protected ViewRecorder $viewRecorder
     ) {
     }
 
@@ -198,39 +198,29 @@ class WaterfallImageResource extends AbstractDatabaseResource
                 }),
 
             // View counter, fired by the frontend lightbox (once per image per
-            // session). Open to guests as browsing is public. Server-side, one
-            // counted view per IP per image per minute: the counter feeds the
-            // recommendation score, so unthrottled increments would let a
-            // scripted client inflate it. cache add() is atomic (Redis SETNX,
-            // lock-guarded elsewhere), so parallel requests cannot double-count.
+            // session). Open to guests as browsing is public. Kept as a
+            // dedicated per-image route (rather than folded into the batch
+            // endpoint) for older clients and other API consumers; what a view
+            // *is* — and how it is counted — lives in ViewRecorder, shared
+            // with the batch endpoint so the two can never disagree.
             Endpoint\Endpoint::make('view')
                 ->route('POST', '/{id}/view')
                 ->action(function (FlarumContext $context): ?object {
                     /** @var WaterfallImage $image */
                     $image = $context->model;
 
-                    if ($image->status === WaterfallImage::STATUS_PUBLISHED) {
-                        $ip = (string) $context->request->getAttribute('ipAddress', '');
+                    // The applied ids are what was actually counted, which is
+                    // also what decides whether the response has to be
+                    // refreshed: the recorder moves the counter with a set-based
+                    // statement, so a view that landed leaves the in-memory
+                    // model one behind the row it is about to serialize.
+                    $applied = $this->viewRecorder->record(
+                        [$image->id],
+                        (string) $context->request->getAttribute('ipAddress', '')
+                    );
 
-                        $counted = $this->cache->add(
-                            'lcoy-waterfall.view.'.md5($ip).'.'.$image->id,
-                            1,
-                            WaterfallImage::VIEW_WINDOW_SECONDS
-                        );
-
-                        if ($counted) {
-                            $this->recordView($image);
-
-                            // Coalesce score recalculation: without this, a
-                            // popular image viewed by many distinct IPs would
-                            // enqueue one job per view. At most one job per
-                            // image per minute keeps the queue bounded; the
-                            // score is recomputed from the live counters, so
-                            // nothing is lost.
-                            if ($this->cache->add('lcoy-waterfall.score.'.$image->id, 1, WaterfallImage::VIEW_WINDOW_SECONDS)) {
-                                $this->queue->push(new RecalculateScoresJob([$image->id]));
-                            }
-                        }
+                    if ($applied !== []) {
+                        $image->refresh();
                     }
 
                     return $image;
@@ -359,46 +349,6 @@ class WaterfallImageResource extends AbstractDatabaseResource
         $actor = $context->getActor();
 
         return $actor->id === $image->user_id || $actor->can('lcoy-waterfall.moderate');
-    }
-
-    /**
-     * Apply one counted view to the image and, when it belongs to a set, to
-     * the set's denormalised counter — as a single transaction holding the
-     * set's row lock.
-     *
-     * The lock is what keeps the two counters consistent:
-     * WaterfallSet::syncAggregates() rewrites the set's counters from the
-     * images under the same lock, so either that sync sees this view already
-     * applied to the image (its sum then includes it) or it runs entirely
-     * before this transaction (and this delta lands on top). Without the lock
-     * a sync that read the images a moment earlier could overwrite the set's
-     * +1 with the older sum.
-     *
-     * Views delta the set directly (unlike likes, whose score recalculation
-     * rewrites the counters anyway) because the recalculation is coalesced to
-     * one job per image per minute: without the delta the set's total would
-     * trail every view in between, and stay behind once the viewing stops.
-     */
-    protected function recordView(WaterfallImage $image): void
-    {
-        if (! $image->set_id) {
-            $image->increment('views_count');
-
-            return;
-        }
-
-        $image->newQuery()->getConnection()->transaction(function () use ($image) {
-            if (WaterfallSet::query()->lockForUpdate()->find($image->set_id) === null) {
-                // The set vanished (its last image was deleted); count the
-                // image on its own.
-                $image->increment('views_count');
-
-                return;
-            }
-
-            $image->increment('views_count');
-            WaterfallSet::query()->whereKey($image->set_id)->increment('views_count');
-        });
     }
 
     /**

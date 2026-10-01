@@ -11,76 +11,28 @@
 
 namespace Lcoy\Waterfall\RateLimit;
 
-use Flarum\Foundation\ValidationException;
-use Flarum\Locale\TranslatorInterface;
 use Flarum\Settings\SettingsRepositoryInterface;
-use Flarum\User\User;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
-use Lcoy\Waterfall\Model\WaterfallImage;
 use Psr\Log\LoggerInterface;
 
 /**
- * Upload rate limiting, fully configurable from the admin panel.
+ * The site-wide per-minute transfer budget for the image host.
  *
- * - Per-user hourly upload count and concurrent pending uploads are enforced
- *   at API time (DB counters — correct across workers and cache stores).
- * - The site-wide per-minute transfer rate is enforced inside the queue job:
- *   over-quota jobs are released back onto the queue with a delay instead of
- *   being dropped, and every deferral is written to the upload log.
+ * A single Redis counter is incremented for every transfer — the original
+ * upload and the optional card copy each count — and compared against
+ * `global_per_minute_limit`. Enforcement lives inside the queue job (not the
+ * API request) because the budget is spent at transfer time, which happens
+ * asynchronously after the response has gone back. Over-quota jobs release()
+ * themselves back onto the queue for the next minute bucket instead of being
+ * dropped, and every deferral is written to the upload log.
  */
 class RateLimiter
 {
     public function __construct(
         protected SettingsRepositoryInterface $settings,
         protected CacheRepository $cache,
-        protected TranslatorInterface $translator,
         protected LoggerInterface $logger
     ) {
-    }
-
-    /**
-     * Enforce per-user limits at request time.
-     *
-     * The keys below are not form fields: Flarum turns each one into
-     * `source.pointer` in the JSON:API error document, which is how the upload
-     * modal tells the two refusals apart without matching translated text. It
-     * matters because they call for different reactions — a full upload
-     * capacity clears on its own within seconds, so the modal waits and sends
-     * the file again, while an hourly quota does not.
-     *
-     * @throws ValidationException
-     */
-    public function assertUserMayUpload(User $actor): void
-    {
-        $hourlyLimit = (int) $this->settings->get('lcoy-waterfall.user_hourly_limit', 20);
-
-        if ($hourlyLimit > 0) {
-            $uploadedLastHour = WaterfallImage::query()
-                ->where('user_id', $actor->id)
-                ->where('created_at', '>=', (new \DateTimeImmutable('-1 hour'))->format('Y-m-d H:i:s'))
-                ->count();
-
-            if ($uploadedLastHour >= $hourlyLimit) {
-                throw new ValidationException([
-                    'upload_quota' => $this->translator->trans('lcoy-waterfall.api.errors.hourly_limit'),
-                ]);
-            }
-        }
-
-        $concurrentLimit = (int) $this->settings->get('lcoy-waterfall.user_concurrent_uploads', 10);
-
-        if ($concurrentLimit > 0) {
-            $pending = WaterfallImage::query()
-                ->where('user_id', $actor->id)
-                ->where('status', WaterfallImage::STATUS_PENDING)
-                ->count();
-
-            if ($pending >= $concurrentLimit) {
-                throw new ValidationException([
-                    'upload_capacity' => $this->translator->trans('lcoy-waterfall.api.errors.concurrency_limit'),
-                ]);
-            }
-        }
     }
 
     /**

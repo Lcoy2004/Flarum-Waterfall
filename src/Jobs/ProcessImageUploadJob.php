@@ -18,10 +18,9 @@ use Illuminate\Queue\Jobs\SyncJob;
 use Lcoy\Waterfall\Event\ImageUploadFailed;
 use Lcoy\Waterfall\Event\ImageWasUploaded;
 use Lcoy\Waterfall\Model\WaterfallImage;
-use Lcoy\Waterfall\Model\WaterfallSet;
 use Lcoy\Waterfall\Model\WaterfallUploadLog;
 use Lcoy\Waterfall\RateLimit\RateLimiter;
-use Lcoy\Waterfall\Recommend\ScoreCalculatorInterface;
+use Lcoy\Waterfall\Upload\ImageLifecycle;
 use Lcoy\Waterfall\Upload\Exception\UploadException;
 use Lcoy\Waterfall\Upload\ExternalImageHostUploader;
 use Psr\Log\LoggerInterface;
@@ -88,7 +87,7 @@ class ProcessImageUploadJob extends AbstractJob
         SettingsRepositoryInterface $settings,
         LoggerInterface $logger,
         Dispatcher $events,
-        ScoreCalculatorInterface $calculator
+        ImageLifecycle $lifecycle
     ): void {
         // Carry the image id rather than the model: AbstractJob's
         // deleteWhenMissingModels drops a job whose serialized model is gone
@@ -143,7 +142,7 @@ class ProcessImageUploadJob extends AbstractJob
                 @unlink($stagedThumbPath);
             }
 
-            $this->markFailed($image, 'staged_file_missing', 'The staged upload file could not be found.', $logger, $events);
+            $this->markFailed($image, 'staged_file_missing', 'The staged upload file could not be found.', $logger, $events, $lifecycle);
 
             return;
         }
@@ -154,7 +153,7 @@ class ProcessImageUploadJob extends AbstractJob
         //
         // What must never happen is the job ending without either: a pending
         // row counts against the uploader's concurrency allowance
-        // (RateLimiter::assertUserMayUpload), so a dropped job would lock them
+        // (UploadQuota's concurrency check), so a dropped job would lock them
         // out of uploading until they deleted the card by hand, and the staged
         // file would sit in the spool forever.
         if (! $rateLimiter->reserveTransferSlot()) {
@@ -176,7 +175,7 @@ class ProcessImageUploadJob extends AbstractJob
                 return;
             }
 
-            $this->markFailed($image, 'transfer_quota_exceeded', 'The site is at its upload limit right now. Please try again in a minute.', $logger, $events);
+            $this->markFailed($image, 'transfer_quota_exceeded', 'The site is at its upload limit right now. Please try again in a minute.', $logger, $events, $lifecycle);
             $this->cleanupStagedFile($settings, $stagedThumbPath);
 
             return;
@@ -212,22 +211,11 @@ class ProcessImageUploadJob extends AbstractJob
                 ?? $result->thumb
                 ?? $result->src;
 
-            // Publish and score in a single write: the score is part of the
-            // same row, and recalculating it in a separate job would leave the
-            // set aggregate to be recomputed a second time (the sync below
-            // already covers it).
-            $image->forceFill([
-                'src' => $result->src,
-                'thumb' => $thumbSrc,
-                'status' => WaterfallImage::STATUS_PUBLISHED,
-                'error' => null,
-                'score' => $calculator->calculate($image),
-            ])->save();
-
-            $published = true;
-
-            // Publishing changes the set's cover/status/counters.
-            WaterfallSet::syncAggregatesForImage($image);
+            // Publish through the lifecycle: the state transition, the score,
+            // and the set's aggregate sync move together, and a row that was
+            // concurrently deleted or already terminal is reported as moot
+            // instead of being republished.
+            $published = $lifecycle->publish($image, $result->src, $thumbSrc);
 
             $log->forceFill([
                 'status' => WaterfallUploadLog::STATUS_SUCCESS,
@@ -246,11 +234,17 @@ class ProcessImageUploadJob extends AbstractJob
                 'error' => $e->getMessage(),
             ])->save();
 
-            $this->markFailed($image, $e->errorCode, $e->getMessage(), $logger, $events);
+            $this->markFailed($image, $e->errorCode, $e->getMessage(), $logger, $events, $lifecycle);
 
             $this->cleanupStagedFile($settings, $stagedThumbPath);
         } catch (\Throwable $e) {
-            if ($published) {
+            // What decides this branch is whether the row went live, not the
+            // local flag alone: publish() refreshes the model right after its
+            // conditional UPDATE and only then syncs the set, so a throw from
+            // that sync leaves $published false while $image already reads
+            // published. Trusting the flag there would write this delivery's
+            // audit row up as FAILED for an image the host is serving.
+            if ($published || $image->status === WaterfallImage::STATUS_PUBLISHED) {
                 // The copy is already on the host and the row says published;
                 // what threw here is the aggregate sync or the log write. The
                 // uploader has just been shown a live image, and marking it
@@ -277,7 +271,7 @@ class ProcessImageUploadJob extends AbstractJob
                 'error' => $e->getMessage(),
             ])->save();
 
-            $this->markFailed($image, 'unexpected_error', $e->getMessage(), $logger, $events);
+            $this->markFailed($image, 'unexpected_error', $e->getMessage(), $logger, $events, $lifecycle);
 
             $this->cleanupStagedFile($settings, $stagedThumbPath);
 
@@ -405,15 +399,16 @@ class ProcessImageUploadJob extends AbstractJob
         string $errorCode,
         string $message,
         LoggerInterface $logger,
-        Dispatcher $events
+        Dispatcher $events,
+        ImageLifecycle $lifecycle
     ): void {
-        $image->forceFill([
-            'status' => WaterfallImage::STATUS_FAILED,
-            'error' => $message,
-        ])->save();
-
-        // A failed image can change the set's cover/status/counters.
-        WaterfallSet::syncAggregatesForImage($image);
+        // A row already terminal (published by an earlier delivery, or
+        // deleted) has nothing left to fail — the failure was already handled
+        // or is moot, so only log and fire the event for a row that actually
+        // transitioned.
+        if (! $lifecycle->fail($image, $message)) {
+            return;
+        }
 
         // Structured entry in the Flarum log for server-side troubleshooting.
         $logger->error('lcoy-waterfall: image upload {id} failed ({code}): {message}', [

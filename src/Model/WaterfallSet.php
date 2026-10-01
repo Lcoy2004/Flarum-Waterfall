@@ -92,8 +92,8 @@ class WaterfallSet extends AbstractModel
      * Recompute one set's counters, addressed by id.
      *
      * The row lock is held across the whole read-images-then-write-totals
-     * sequence. The view path's counter delta (WaterfallImageResource::
-     * recordView) takes the same lock, so a delta can no longer land between
+     * sequence. The view path's counter delta (ViewRecorder::applyCounters)
+     * takes the same lock, so a delta can no longer land between
      * this read and write only to be overwritten by the older sum — a lost
      * update nothing would later correct for an otherwise quiet set.
      * Concurrent syncs serialise here too.
