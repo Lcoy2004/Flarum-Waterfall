@@ -1,5 +1,6 @@
 import app from 'flarum/forum/app';
 import Component from 'flarum/common/Component';
+import Button from 'flarum/common/components/Button';
 import LoadingIndicator from 'flarum/common/components/LoadingIndicator';
 import type Mithril from 'mithril';
 
@@ -140,9 +141,26 @@ export default class WaterfallGrid<CustomAttrs extends WaterfallGridAttrs = Wate
         </div>
 
         {state.hasMore ? (
-          <div className="WaterfallGrid-sentinel" aria-hidden="true">
-            {state.loadingMore && <LoadingIndicator size="small" />}
-          </div>
+          state.loadMoreFailed ? (
+            // Not the sentinel: the observer has already fired for it and the
+            // element never left the viewport, so it would sit blank until the
+            // reader happened to scroll it out of the margin and back. An
+            // explicit retry is the only way out, and loadNext() already
+            // refuses to run twice over, so the button cannot double-fetch.
+            // Dropping the sentinel also disconnects the observer, which is
+            // what keeps a re-armed one from firing straight into the failure
+            // it just came back from.
+            <div className="WaterfallGrid-moreFailed">
+              <p>{app.translator.trans('lcoy-waterfall.forum.grid.load_failed')}</p>
+              <Button className="Button" onclick={() => state.loadNext()}>
+                {app.translator.trans('lcoy-waterfall.forum.grid.retry')}
+              </Button>
+            </div>
+          ) : (
+            <div className="WaterfallGrid-sentinel" aria-hidden="true">
+              {state.loadingMore && <LoadingIndicator size="small" />}
+            </div>
+          )
         ) : (
           <div className="WaterfallGrid-end">{app.translator.trans('lcoy-waterfall.forum.grid.end_of_feed')}</div>
         )}

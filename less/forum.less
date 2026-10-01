@@ -219,8 +219,9 @@
     }
   }
 
-  // Both the infinite-scroll sentinel and the "end of feed" marker sit in
-  // normal flow below the grid, so they can never overlap the last row.
+  // The infinite-scroll sentinel, the "end of feed" marker and the failure
+  // retry sit in normal flow below the grid, so they can never overlap the
+  // last row.
   &-sentinel,
   &-end {
     display: flex;
@@ -230,6 +231,25 @@
     padding: 12px 0;
     color: var(--muted-color);
     font-size: 13px;
+  }
+
+  // Stands in for the sentinel when a page failed to arrive, so it takes the
+  // same place in the flow — but stacked, because it carries a button.
+  &-moreFailed {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 56px;
+    padding: 20px 0;
+    text-align: center;
+    color: var(--muted-color);
+    font-size: 13px;
+
+    p {
+      margin: 0;
+    }
   }
 }
 
@@ -1246,7 +1266,7 @@
     color: var(--muted-color);
 
     .fa-check {
-      color: var(--success-color, #4caf50);
+      color: var(--control-success-color, #4caf50);
     }
   }
 
@@ -1362,10 +1382,16 @@
 
   // The skeleton's sweep lives on a pseudo-element, whose animation is not
   // switched off by `animation: none` on its parent — it has to be named too.
+  //
+  // The lightbox joins them because it crossfades and zooms as it opens, which
+  // is motion the reader did not ask for and cannot stop: `transition: none`
+  // above does not reach an animation, only the transitions it names.
   .WaterfallCard-skeleton,
   .WaterfallCard-skeleton::before,
   .WaterfallCard-img--active,
-  .WaterfallCard-dot {
+  .WaterfallCard-dot,
+  .WaterfallLightbox,
+  .WaterfallLightbox-img {
     animation: none;
     transition: none;
   }

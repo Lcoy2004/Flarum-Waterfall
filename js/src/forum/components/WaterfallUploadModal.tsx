@@ -229,13 +229,14 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
         >
           <i className="fas fa-cloud-upload-alt" aria-hidden="true" />
           <p>{app.translator.trans('lcoy-waterfall.forum.upload_modal.drop_here')}</p>
-          <Button className="Button Button--primary" onclick={() => this.pickFiles()}>
+          <Button className="Button Button--primary" disabled={this.submitting} onclick={() => this.pickFiles()}>
             {app.translator.trans('lcoy-waterfall.forum.upload_modal.choose_files')}
           </Button>
           <input
             type="file"
             className="WaterfallUploadModal-fileInput"
             accept={acceptAttribute()}
+            disabled={this.submitting}
             multiple
             onchange={(e: Event) => {
               const input = e.target as HTMLInputElement;
@@ -429,7 +430,12 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
   }
 
   protected addFiles(fileList: FileList | null | undefined): void {
-    if (!fileList) {
+    // A run in progress has already taken its snapshot of the preparation
+    // promises below, so a file arriving now would be queued and picked up by
+    // uploadQueue() while its own preparation is still in flight — the card
+    // copy would be missing and the feed would download the full-size
+    // original. Refusing it is also what the picker's disabled state says.
+    if (!fileList || this.submitting) {
       return;
     }
 

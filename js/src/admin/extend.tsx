@@ -89,7 +89,10 @@ export default [
       }),
       95
     )
-    // One-click sanity check for the image host settings above.
+    // One-click sanity check for the image host settings. It reads what is
+    // stored, not what the fields above currently show: the endpoint it calls
+    // takes no body, so an edit that has not been saved is not what gets
+    // tested. Worth knowing before trusting a green result after a change.
     .customSetting(() => <WaterfallConfigTest />, 94)
     // -- Upload limits ---------------------------------------------------
     .customSetting(() => <h3 className="WaterfallSettings-heading">{app.translator.trans('lcoy-waterfall.admin.settings.limits_heading')}</h3>, 90)

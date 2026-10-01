@@ -19,6 +19,19 @@ export default class WaterfallState {
   loading = false;
   loadingMore = false;
   hasMore = true;
+
+  /**
+   * Set when a load-more attempt failed, and cleared by the next attempt.
+   *
+   * The sentinel cannot recover on its own: the observer has already fired and
+   * the element stayed in the viewport, so it will not fire again until the
+   * reader scrolls the sentinel out of the 600px margin and back — with
+   * nothing on screen saying so, and a blank area where the sentinel is, which
+   * reads as "there is no more". The grid watches this to swap the sentinel
+   * for a message and a button.
+   */
+  loadMoreFailed = false;
+
   protected offset = 0;
   protected initialLoaded = false;
 
@@ -162,6 +175,8 @@ export default class WaterfallState {
     const epoch = this.loadEpoch;
 
     this.loadingMore = true;
+    // Whatever the previous attempt ended in, this one is asking again.
+    this.loadMoreFailed = false;
 
     app.store
       .find<WaterfallSet[]>('waterfall-sets', this.requestParams({ page: { offset: this.offset, limit: this.perPage } }))
@@ -180,6 +195,9 @@ export default class WaterfallState {
       .catch((error: unknown) => {
         if (epoch === this.loadEpoch) {
           this.showError(error, 'lcoy-waterfall.forum.grid.load_failed');
+          // hasMore stays true (there is more, it just did not arrive), so
+          // the failure needs its own marker for the grid to act on.
+          this.loadMoreFailed = true;
         }
       })
       .then(() => {
@@ -205,6 +223,7 @@ export default class WaterfallState {
     this.sort = sort;
     this.sets = [];
     this.hasMore = true;
+    this.loadMoreFailed = false;
     this.offset = 0;
     this.initialLoaded = false;
     this.load();

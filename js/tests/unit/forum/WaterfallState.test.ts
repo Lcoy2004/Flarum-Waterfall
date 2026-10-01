@@ -177,3 +177,107 @@ describe('WaterfallState polling', () => {
     expect((state as any).pollTimer).toBeNull();
   });
 });
+
+/**
+ * Infinite scroll has no way to recover by itself. Its IntersectionObserver has
+ * already fired for the sentinel and the element never left the viewport, so it
+ * will not fire again until the reader scrolls it out of the margin and back —
+ * silently, with a blank strip where the sentinel is. A failed page therefore
+ * has to be recorded, so the grid can offer the retry the message promises.
+ */
+describe('WaterfallState load-more recovery', () => {
+  /** A store whose next answer the test decides. */
+  function controllableStore() {
+    const calls: unknown[][] = [];
+    let answer: () => Promise<unknown> = () => Promise.resolve([]);
+
+    (app as any).forum = { attribute: (key: string) => attributes[key] };
+    (app as any).alerts = { show: () => {} };
+    (app as any).translator = { trans: (key: string) => key };
+    (app as any).store = {
+      find: (resource: unknown, ids: unknown, options: unknown) => {
+        calls.push([resource, ids, options]);
+
+        return answer();
+      },
+    };
+
+    return {
+      calls,
+      resolves: () => (answer = () => Promise.resolve([])),
+      rejects: () => (answer = () => Promise.reject(new Error('offline'))),
+      pending: () => {
+        let release: (value: unknown) => void = () => {};
+
+        answer = () => new Promise((resolve) => (release = resolve));
+
+        return () => release([]);
+      },
+    };
+  }
+
+  it('records the failure so the grid can offer a retry', async () => {
+    const store = controllableStore();
+    const state = new WaterfallState();
+
+    store.rejects();
+    state.loadNext();
+    await settle();
+
+    expect(state.loadMoreFailed).toBe(true);
+    // There is more; it just did not arrive. Marking the feed finished here
+    // would be a lie the reader has no way to correct.
+    expect(state.hasMore).toBe(true);
+    expect(state.loadingMore).toBe(false);
+  });
+
+  it('clears the failure and asks again when the retry is taken', async () => {
+    const store = controllableStore();
+    const state = new WaterfallState();
+
+    store.rejects();
+    state.loadNext();
+    await settle();
+
+    // What the grid's retry button calls.
+    store.resolves();
+    state.loadNext();
+    await settle();
+
+    expect(store.calls).toHaveLength(2);
+    expect(state.loadMoreFailed).toBe(false);
+  });
+
+  it('refuses a second attempt while one is still in flight', async () => {
+    const store = controllableStore();
+    const state = new WaterfallState();
+
+    // Guards the retry button against a double click: a second fetch for the
+    // same page would arrive with the same offset and duplicate every card.
+    const release = store.pending();
+
+    state.loadNext();
+    state.loadNext();
+
+    expect(store.calls).toHaveLength(1);
+
+    release();
+    await settle();
+  });
+
+  it('clears the failure when the sort tab changes', async () => {
+    const store = controllableStore();
+    const state = new WaterfallState();
+
+    store.rejects();
+    state.loadNext();
+    await settle();
+
+    expect(state.loadMoreFailed).toBe(true);
+
+    store.resolves();
+    state.setSort('recommended');
+
+    expect(state.loadMoreFailed).toBe(false);
+  });
+});

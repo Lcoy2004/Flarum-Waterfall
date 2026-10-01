@@ -291,6 +291,18 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
    */
   protected removeImage(image: WaterfallImage): void {
     const id = image.id();
+
+    // A delete resolves asynchronously, so by the time this runs the lightbox
+    // may have been closed and another set opened. Identify the target by
+    // membership rather than trusting whatever is open now: the callback is
+    // about an image from the list that was open when the request went out,
+    // and moving the count or the paging offset of a set that lost nothing
+    // would leave it reporting an image it still has, or fetching past one it
+    // does.
+    if (!this.openSetImages.some((existing) => existing.id() === id)) {
+      return;
+    }
+
     const set = this.openSet;
 
     this.openSetImages = this.openSetImages.filter((existing) => existing.id() !== id);
