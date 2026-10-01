@@ -15,6 +15,7 @@ use Flarum\Api\Client;
 use Flarum\Frontend\Document;
 use Flarum\Locale\TranslatorInterface;
 use Flarum\Settings\SettingsRepositoryInterface;
+use Lcoy\Waterfall\Upload\ExternalImageHostUploader;
 use Psr\Http\Message\ServerRequestInterface as Request;
 
 /**
@@ -92,7 +93,14 @@ class WaterfallContent
             foreach (['src', 'thumb'] as $key) {
                 $url = $resource['attributes'][$key] ?? null;
 
-                if (! is_string($url) || ! str_starts_with($url, 'http')) {
+                // The uploader's own helper, not a hand-rolled prefix test: it
+                // normalises the scheme, and the two have to answer the same
+                // question. A "HTTPS://…" src is stored as it came back (the
+                // uploader accepts it), and a case-sensitive prefix test would
+                // quietly skip it — losing the preconnect for exactly the hosts
+                // that answered that way. Relative URLs stay excluded: they are
+                // same-origin by definition.
+                if (! is_string($url) || ! ExternalImageHostUploader::urlUsesHttpScheme($url)) {
                     continue;
                 }
 

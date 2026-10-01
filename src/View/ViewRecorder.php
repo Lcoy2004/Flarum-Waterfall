@@ -16,6 +16,7 @@ use Illuminate\Contracts\Queue\Queue;
 use Lcoy\Waterfall\Jobs\RecalculateScoresJob;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallSet;
+use Psr\Log\LoggerInterface;
 
 /**
  * The single authority for what a "view" is and how it is recorded.
@@ -29,7 +30,12 @@ use Lcoy\Waterfall\Model\WaterfallSet;
  *
  * Counting is throttled per IP because the counter feeds the recommendation
  * score: an unthrottled client could inflate it. cache add() is atomic (Redis
- * SETNX, lock-guarded elsewhere), so parallel requests cannot double-count.
+ * SETNX, and a transaction under the database store), so parallel requests
+ * cannot double-count.
+ *
+ * The throttle is a guard, never a precondition: with the cache unreachable
+ * a view is counted rather than refused, because a cache blip should not take
+ * the endpoint down — see claimWindow().
  */
 class ViewRecorder
 {
@@ -42,7 +48,8 @@ class ViewRecorder
 
     public function __construct(
         protected CacheRepository $cache,
-        protected Queue $queue
+        protected Queue $queue,
+        protected LoggerInterface $logger
     ) {
     }
 
@@ -81,7 +88,7 @@ class ViewRecorder
         $counted = [];
 
         foreach ($images as $image) {
-            if (! $this->cache->add('lcoy-waterfall.view.'.$ipKey.'.'.$image->id, 1, WaterfallImage::VIEW_WINDOW_SECONDS)) {
+            if (! $this->claimWindow('lcoy-waterfall.view.'.$ipKey.'.'.$image->id)) {
                 continue;
             }
 
@@ -101,6 +108,31 @@ class ViewRecorder
         $this->queueRecalculations($images, $counted);
 
         return $applied;
+    }
+
+    /**
+     * Claim the short-lived window the given key names, answering true when
+     * the caller may proceed.
+     *
+     * A window is a guard against a client inflating a counter, so the only
+     * two answers that mean anything are "this is the first one" and "this one
+     * is a repeat". A cache that cannot be reached is neither, and refusing
+     * there would turn a cache blip into an endpoint that 500s for as long as
+     * the outage lasts — so the window opens and the failure is logged, since
+     * it means every window is open until it clears.
+     */
+    protected function claimWindow(string $key): bool
+    {
+        try {
+            return (bool) $this->cache->add($key, 1, WaterfallImage::VIEW_WINDOW_SECONDS);
+        } catch (\Throwable $e) {
+            $this->logger->warning('lcoy-waterfall: {key} could not be checked ({message}); counting without it', [
+                'key' => $key,
+                'message' => $e->getMessage(),
+            ]);
+
+            return true;
+        }
     }
 
     /**
@@ -195,7 +227,7 @@ class ViewRecorder
         $recalculate = [];
 
         foreach ($images as $image) {
-            if (isset($counted[$image->id]) && $this->cache->add('lcoy-waterfall.score.'.$image->id, 1, WaterfallImage::VIEW_WINDOW_SECONDS)) {
+            if (isset($counted[$image->id]) && $this->claimWindow('lcoy-waterfall.score.'.$image->id)) {
                 $recalculate[] = $image->id;
             }
         }

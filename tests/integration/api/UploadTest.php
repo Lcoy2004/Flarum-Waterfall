@@ -262,6 +262,43 @@ class UploadTest extends TestCase
     }
 
     /**
+     * The per-minute transfer quota lives in the cache; a cache that cannot be
+     * reached must not become a failed upload.
+     *
+     * Left unhandled, the throw escapes handle() before anything is caught:
+     * the job burns its tries and lands in failed_jobs with the row still
+     * pending and its staged file still on the spool, and a pending row holds
+     * one of the uploader's concurrency slots — so a cache blip would lock
+     * people out of uploading until someone cleared the cards by hand.
+     */
+    #[Test]
+    public function an_upload_still_succeeds_when_the_cache_is_unreachable()
+    {
+        $container = $this->app()->getContainer();
+
+        $container->instance(ExternalImageHostUploader::class, $this->mockUploader('/file/mock-upload.png'));
+
+        $broken = $this->createMock(CacheRepository::class);
+        $broken->expects($this->atLeastOnce())->method('add')->willThrowException(new \RuntimeException('cache unavailable'));
+
+        $container->instance(CacheRepository::class, $broken);
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                ->withUploadedFiles(['file' => $this->pngUpload()])
+                ->withParsedBody(['title' => 'Cache down'])
+        );
+
+        $this->assertEquals(201, $response->getStatusCode());
+
+        $body = json_decode($response->getBody(), true);
+
+        // Published, not failed: the transfer went ahead without the quota
+        // rather than being refused for want of a cache to ask.
+        $this->assertEquals(WaterfallImage::STATUS_PUBLISHED, $body['data']['attributes']['status']);
+    }
+
+    /**
      * A staged file is only ever worth keeping for a job that is holding it, so
      * every exit that is not a successful push has to take it back.
      *

@@ -36,7 +36,17 @@ class DefaultScoreCalculator implements ScoreCalculatorInterface
         $w1 = (float) $this->settings->get('lcoy-waterfall.weight_likes', 1.0);
         $w2 = (float) $this->settings->get('lcoy-waterfall.weight_views', 0.3);
         $w3 = (float) $this->settings->get('lcoy-waterfall.weight_recency', 1.0);
-        $lambda = (float) $this->settings->get('lcoy-waterfall.decay_lambda', 0.05);
+
+        // Clamped, not trusted. Nothing in front of this enforces the admin
+        // field's `min`: Flarum's Form is a plain div submitted by a button, so
+        // the browser never runs its constraint validation, and the setting can
+        // also be written from the CLI. A negative lambda turns the recency term
+        // into exp(+large), which is INF by the time it is rounded — and INF
+        // does not fit the column the score is stored in, so a single bad
+        // setting would make every upload and every recalculation fail.
+        // Negative decay is meaningless rather than merely unusual, so treating
+        // it as no decay is the reading that keeps the feed working.
+        $lambda = max(0.0, (float) $this->settings->get('lcoy-waterfall.decay_lambda', 0.05));
 
         $likes = max(0, (int) $image->likes_count);
         $views = max(0, (int) $image->views_count);

@@ -16,6 +16,7 @@ use Flarum\Group\Group;
 use Flarum\Testing\integration\RetrievesAuthorizedUsers;
 use Flarum\Testing\integration\TestCase;
 use Flarum\User\User;
+use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallImageLike;
 use Lcoy\Waterfall\Model\WaterfallSet;
@@ -302,6 +303,33 @@ class WaterfallImagesTest extends TestCase
         );
 
         $this->assertEquals(0, WaterfallImage::query()->find(4)->views_count);
+    }
+
+    /**
+     * The per-IP window is held in the cache, so an unreachable cache is the
+     * one case where the recorder cannot tell a first view from a repeat. It
+     * counts: taking the endpoint down for as long as the outage lasts is the
+     * worse of the two, and the alternative — refusing — would also stop the
+     * feed recording reads at all.
+     */
+    #[Test]
+    public function a_view_is_counted_even_when_the_cache_is_unreachable()
+    {
+        $this->app();
+
+        $cache = $this->createMock(CacheRepository::class);
+        $cache->expects($this->atLeastOnce())->method('add')->willThrowException(new \RuntimeException('cache unavailable'));
+
+        $this->app()->getContainer()->instance(CacheRepository::class, $cache);
+
+        $before = WaterfallImage::query()->find(1)->views_count;
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images/1/view', ['authenticatedAs' => 2])
+        );
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals($before + 1, WaterfallImage::query()->find(1)->views_count);
     }
 
     /**

@@ -18,6 +18,7 @@ use Illuminate\Queue\Jobs\SyncJob;
 use Lcoy\Waterfall\Event\ImageUploadFailed;
 use Lcoy\Waterfall\Event\ImageWasUploaded;
 use Lcoy\Waterfall\Model\WaterfallImage;
+use Lcoy\Waterfall\Model\WaterfallSet;
 use Lcoy\Waterfall\Model\WaterfallUploadLog;
 use Lcoy\Waterfall\RateLimit\RateLimiter;
 use Lcoy\Waterfall\Upload\ImageLifecycle;
@@ -127,6 +128,15 @@ class ProcessImageUploadJob extends AbstractJob
                 if ($stagedThumbPath !== null) {
                     @unlink($stagedThumbPath);
                 }
+
+                // Re-sync the set even though this delivery has nothing left to
+                // do. The run that resolved the row could have written the
+                // status and then failed at the aggregate sync that follows it
+                // (see the catch below), and no later delivery would repair it:
+                // this is the branch they all leave through. The sync is
+                // idempotent and addressed by id, so re-running it on an
+                // already-correct set costs one read.
+                WaterfallSet::syncAggregatesForImage($image);
 
                 return;
             }

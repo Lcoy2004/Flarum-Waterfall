@@ -328,7 +328,13 @@ class ExternalImageHostUploader
             return ! str_starts_with($src, '//');
         }
 
-        $scheme = parse_url($src, PHP_URL_SCHEME);
+        // Lower-cased before the comparison, as urlUsesHttpScheme does: a
+        // scheme is case-insensitive, parse_url hands it back exactly as it was
+        // written, and the two helpers have to agree. Without this, a host
+        // answering "HTTPS://…" — or an upload URL the admin typed in capitals,
+        // which then sets the origin root-relative paths are resolved against —
+        // reads as an unsafe scheme and the finished upload is thrown away.
+        $scheme = strtolower((string) parse_url($src, PHP_URL_SCHEME));
 
         return in_array($scheme, ['http', 'https'], true);
     }

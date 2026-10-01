@@ -52,14 +52,33 @@ class RateLimiter
 
         $key = 'lcoy-waterfall.transfers.'.date('YmdHi');
 
-        // Atomic counter across workers: add() only seeds the bucket when it
-        // does not exist yet, and increment() maps to Redis INCR (and to
-        // lock-guarded read-modify-write on the file/database stores), so
-        // parallel jobs can never read the same count and overshoot the quota.
-        // 120s TTL: long enough to cover the minute bucket, short enough to
-        // self-clean on cache stores without TTL support.
-        $this->cache->add($key, 0, 120);
-        $count = (int) $this->cache->increment($key);
+        try {
+            // add() only seeds the bucket when it does not exist yet, and
+            // increment() is atomic on the stores that matter: Redis INCR, and
+            // a transaction with a row lock on the database store. The file
+            // store is the exception — its increment() is a plain
+            // read-modify-write, so two workers racing there can lose a count
+            // and let the minute run slightly over. That is an argument for not
+            // running a busy site on the file store, not for changing the check.
+            //
+            // 120s TTL: long enough to cover the minute bucket, short enough to
+            // self-clean on cache stores without TTL support.
+            $this->cache->add($key, 0, 120);
+            $count = (int) $this->cache->increment($key);
+        } catch (\Throwable $e) {
+            // The quota exists to keep a burst off the image host; it is not
+            // what makes a transfer valid. Failing here would be far worse than
+            // the burst it prevents: the job would spend its tries and land in
+            // failed_jobs with the row still pending and its staged file still
+            // on disk, and a pending row holds one of the uploader's
+            // concurrency slots — so a cache blip would lock people out of
+            // uploading until someone deleted the cards by hand.
+            $this->logger->warning('lcoy-waterfall: transfer quota could not be checked ({message}); letting the transfer through', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return true;
+        }
 
         if ($count > $limit) {
             $this->logger->info('lcoy-waterfall: global transfer quota exceeded for this minute, deferring job', [
