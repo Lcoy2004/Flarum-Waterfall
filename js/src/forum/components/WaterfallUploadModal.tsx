@@ -7,8 +7,9 @@ import extractText from 'flarum/common/utils/extractText';
 import type { IInternalModalAttrs } from 'flarum/common/components/Modal';
 
 import type WaterfallSet from '../../common/models/WaterfallSet';
+import { decodeImage, encodeThumbnail } from '../../common/imageThumbnail';
+import { capacityExhaustedMessage, capacityWaitDelay, sendImageUpload, UPLOAD_CAPACITY_MAX_WAITS } from '../../common/imageUpload';
 import { MAX_TAGS, MAX_TAG_LENGTH, splitTagDraft } from '../../common/tags';
-import { uploadExtension } from '../../common/uploadFilename';
 import { acceptListForWhitelist } from '../../common/uploadWhitelist';
 import type WaterfallState from '../states/WaterfallState';
 
@@ -34,10 +35,10 @@ interface QueueItem {
   // Intrinsic size, pre-read locally for the queue label only.
   width: number | null;
   height: number | null;
-  // Card-sized copy encoded in the browser (see makeThumb): the feed renders
-  // `thumb ?? src`, so without one every card would download the full-size
-  // original. Null when the file gains nothing from a copy (small, GIF, or
-  // the encoder is unavailable).
+  // Card-sized copy encoded in the browser (see common/imageThumbnail): the
+  // feed renders `thumb ?? src`, so without one every card would download the
+  // full-size original. Null when the file gains nothing from a copy (small,
+  // GIF, or the encoder is unavailable).
   thumb: Blob | null;
   progress: number;
   status: QueueStatus;
@@ -50,38 +51,6 @@ interface QueueItem {
   // left for it (see uploadItem): the row says so instead of showing a
   // progress figure that is not moving.
   waitingForCapacity?: boolean;
-}
-
-/**
- * The `detail` of the first error in a JSON:API error document, falling back
- * to the HTTP status when the body is something else.
- */
-function readErrorDetail(xhr: XMLHttpRequest): string {
-  try {
-    const payload = JSON.parse(xhr.responseText);
-    const detail = payload?.errors?.[0]?.detail || payload?.errors?.[0]?.title;
-
-    return typeof detail === 'string' ? detail : `HTTP ${xhr.status}`;
-  } catch {
-    return `HTTP ${xhr.status}`;
-  }
-}
-
-/**
- * Whether the server refused only because this uploader already has as many
- * images in flight as the admin allows.
- *
- * Matched on the error's `source.pointer` — the key RateLimiter throws under
- * for exactly this case — and not on the message, which is translated.
- */
-function isCapacityRejection(responseText: string): boolean {
-  try {
-    const pointer = JSON.parse(responseText)?.errors?.[0]?.source?.pointer;
-
-    return typeof pointer === 'string' && pointer.endsWith('/upload_capacity');
-  } catch {
-    return false;
-  }
 }
 
 export interface WaterfallUploadModalAttrs extends IInternalModalAttrs {
@@ -101,26 +70,6 @@ export interface WaterfallUploadModalAttrs extends IInternalModalAttrs {
  * `pending` resource; the queue worker then transfers them to the image host.
  */
 export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadModalAttrs = WaterfallUploadModalAttrs> extends Modal<CustomAttrs> {
-  /**
-   * How long an item waits for the uploader's own in-flight images to finish,
-   * and how many times it asks again before giving up and offering the manual
-   * retry.
-   *
-   * The wait ends when a transfer completes, and one transfer is two requests
-   * to an external host that is allowed up to `upload_timeout` (30s) each — so
-   * the budget has to cover the slow end of that, not the quick one. It used to
-   * stop after four attempts, 15 seconds in all, which an ordinary batch
-   * against a slow host runs out while the condition is still temporary: the
-   * file was never rejected, it just had not had its turn yet, and the user was
-   * handed a failure to retry by hand.
-   *
-   * The interval grows up to a ceiling instead of growing without bound, so a
-   * long wait keeps asking often enough to take a slot the moment one appears.
-   */
-  protected static readonly MAX_CAPACITY_WAITS = 20;
-  protected static readonly CAPACITY_WAIT_MS = 1500;
-  protected static readonly CAPACITY_WAIT_MAX_MS = 5000;
-
   protected queue: QueueItem[] = [];
   protected dragging = false;
   protected submitting = false;
@@ -530,17 +479,11 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
     m.redraw();
   }
 
-  // Card thumbnails: the feed renders `thumb ?? src`, so a card-sized copy
-  // keeps every grid visit from downloading the full-size original (a phone
-  // photo is megabytes; the copy is tens of kilobytes). Files this small gain
-  // nothing from one.
-  protected static readonly THUMB_MAX_EDGE = 800;
-  protected static readonly THUMB_SKIP_BYTES = 150_000;
-
   /**
    * Decode a queued file once and read everything the queue needs from the
-   * decode: the intrinsic size for the label, and the card-sized copy. Runs in
-   * the background while the user arranges the queue; submit() waits for it.
+   * decode: the intrinsic size for the label, and the card-sized copy (both
+   * in common/imageThumbnail). Runs in the background while the user arranges
+   * the queue; submit() waits for it.
    *
    * Never rejects — a file that will not decode here will fail server-side
    * validation anyway, and an item without a copy is still uploadable.
@@ -549,11 +492,11 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
     let source: ImageBitmap | HTMLImageElement | undefined;
 
     try {
-      source = await this.decodeFile(item.file);
+      source = await decodeImage(item.file);
 
       item.width = source.width;
       item.height = source.height;
-      item.thumb = await this.makeThumb(source, item.file);
+      item.thumb = await encodeThumbnail(source, item.file);
     } catch {
       // A file that will not decode here will fail server-side validation
       // anyway; leaving the label off is enough.
@@ -567,91 +510,6 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
     }
 
     m.redraw();
-  }
-
-  /**
-   * Decode with EXIF orientation applied. `from-image` is what makes
-   * createImageBitmap respect it; the <img> fallback inherits the same
-   * behaviour from the CSS default `image-orientation: from-image`.
-   */
-  protected async decodeFile(file: File): Promise<ImageBitmap | HTMLImageElement> {
-    if ('createImageBitmap' in window) {
-      try {
-        const options: ImageBitmapOptions = {};
-
-        // 'from-image' postdates this TypeScript's lib.dom (whose union is
-        // only "flipY" | "none"); every current engine accepts it, so poke
-        // the value through without weakening the rest of the type.
-        (options as { imageOrientation?: string }).imageOrientation = 'from-image';
-
-        return await createImageBitmap(file, options);
-      } catch {
-        // Engines that reject the options bag (or exotic files) fall through
-        // to the <img> path below.
-      }
-    }
-
-    const url = URL.createObjectURL(file);
-
-    try {
-      const img = new Image();
-
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('decode failed'));
-        img.src = url;
-      });
-
-      return img;
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-  }
-
-  /**
-   * Encode the card-sized copy. GIFs are skipped (a static frame would kill
-   * the animation on the card), as are files with nothing to shrink. WebP is
-   * asked for first and JPEG kept as the fallback; a browser that cannot
-   * encode the requested type silently returns a PNG instead, so the blob's
-   * actual type is what decides.
-   */
-  protected async makeThumb(source: ImageBitmap | HTMLImageElement, file: File): Promise<Blob | null> {
-    if (file.type === 'image/gif' || file.size < WaterfallUploadModal.THUMB_SKIP_BYTES) {
-      return null;
-    }
-
-    const scale = Math.min(1, WaterfallUploadModal.THUMB_MAX_EDGE / Math.max(source.width, source.height));
-
-    if (scale >= 1) {
-      return null;
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(source.width * scale);
-    canvas.height = Math.round(source.height * scale);
-
-    const context = canvas.getContext('2d');
-
-    if (!context) {
-      return null;
-    }
-
-    // JPEG has no alpha channel, so a transparent source would come out on a
-    // black background in the fallback encoder. White matches what the card
-    // shows for a transparent image in a browser that *can* encode WebP.
-    context.fillStyle = '#fff';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(source, 0, 0, canvas.width, canvas.height);
-
-    for (const type of ['image/webp', 'image/jpeg'] as const) {
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, 0.8));
-
-      if (blob && blob.type === type) {
-        return blob;
-      }
-    }
-
-    return null;
   }
 
   /**
@@ -841,7 +699,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
         return;
       }
 
-      if (attempt >= WaterfallUploadModal.MAX_CAPACITY_WAITS) {
+      if (attempt >= UPLOAD_CAPACITY_MAX_WAITS) {
         // Out of patience: the file was never transferred, and leaving it on
         // 'uploading' would hide that — the row would sit at 0% forever, the
         // run would never report itself finished, and the one thing the user
@@ -849,7 +707,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
         item.waitingForCapacity = false;
         item.status = 'error';
         item.progress = 0;
-        item.error = extractText(app.translator.trans('lcoy-waterfall.api.errors.concurrency_limit'));
+        item.error = capacityExhaustedMessage();
         m.redraw();
 
         return;
@@ -858,9 +716,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
       item.waitingForCapacity = true;
       m.redraw();
 
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(WaterfallUploadModal.CAPACITY_WAIT_MS * (attempt + 1), WaterfallUploadModal.CAPACITY_WAIT_MAX_MS))
-      );
+      await new Promise((resolve) => setTimeout(resolve, capacityWaitDelay(attempt)));
 
       item.waitingForCapacity = false;
 
@@ -875,108 +731,79 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
    * One attempt at sending an item, resolving with what came of it: 'done',
    * 'capacity' (the server refused for no reason other than this uploader's
    * own in-flight images), 'failed', or 'aborted'.
+   *
+   * The XHR mechanics live in sendImageUpload (common/imageUpload); this
+   * method only maps the outcome onto the queue item and the feed.
    */
   protected sendItem(item: QueueItem, set: WaterfallSet): Promise<'done' | 'capacity' | 'failed' | 'aborted'> {
-    return new Promise((resolve) => {
-      const body = new FormData();
+    return sendImageUpload(item, this.queue.indexOf(item), String(set.id()), {
+      // The handle is not cleared here: afterSettle does that on every
+      // outcome, and clearing it after onXhr had set it would leave
+      // cancelItem() with nothing to abort. See the ordering note in
+      // sendImageUpload.
+      beforeStart: () => {
+        item.status = 'uploading';
+        item.progress = 0;
+        item.error = null;
+        item.waitingForCapacity = false;
+      },
+      onXhr: (xhr) => {
+        item.xhr = xhr;
+      },
+      onProgress: (progress) => {
+        item.progress = progress;
+        m.redraw();
+      },
+      afterSettle: () => {
+        item.xhr = null;
+      },
+    }).then((result) => {
+      if (result.outcome === 'done') {
+        item.status = 'done';
+        item.progress = 100;
 
-      // Both parts travel under an ASCII-only name: the browser would
-      // otherwise put the file's own name — Chinese, and possibly quoted —
-      // into the multipart header, which the site's WAF can read as a
-      // malformed request and answer by blocking the uploader's IP. Only
-      // the extension is load-bearing (see uploadExtension).
-      body.append('file', item.file, `image.${uploadExtension(item.file.type, item.file.name)}`);
-      body.append('title', item.title);
-      body.append('set_id', String(set.id()));
-      body.append('position', String(this.queue.indexOf(item)));
+        const state = this.attrs.waterfallState;
 
-      // The browser-encoded card copy travels in the same request; the queue
-      // job forwards it to the image host after the original (see
-      // ProcessImageUploadJob::transferThumbnail).
-      if (item.thumb) {
-        body.append('thumb', item.thumb, `thumb.${uploadExtension(item.thumb.type)}`);
+        // Add the set to the feed once, on the first successful file; it is
+        // then polled until the worker finishes the transfers.
+        if (state && !this.setAdded) {
+          this.setAdded = true;
+          state.addUploadedSet(set);
+        }
+
+        m.redraw();
+
+        return 'done' as const;
       }
 
-      const xhr = new XMLHttpRequest();
+      if (result.outcome === 'capacity') {
+        // Left on 'uploading': the caller is about to wait and send again.
+        m.redraw();
 
-      item.xhr = xhr;
-      item.status = 'uploading';
-      item.progress = 0;
-      item.error = null;
-      item.waitingForCapacity = false;
+        return 'capacity' as const;
+      }
 
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          item.progress = Math.round((e.loaded / e.total) * 100);
-          m.redraw();
-        }
-      };
-
-      xhr.onload = () => {
-        item.xhr = null;
-
-        if (xhr.status >= 200 && xhr.status < 300) {
-          item.status = 'done';
-          item.progress = 100;
-
-          const state = this.attrs.waterfallState;
-
-          // Add the set to the feed once, on the first successful file; it is
-          // then polled until the worker finishes the transfers.
-          if (state && !this.setAdded) {
-            this.setAdded = true;
-            state.addUploadedSet(set);
-          }
-
-          m.redraw();
-          resolve('done');
-
-          return;
-        }
-
-        if (isCapacityRejection(xhr.responseText)) {
-          // Left on 'uploading': the caller is about to wait and send again.
-          m.redraw();
-          resolve('capacity');
-
-          return;
-        }
-
+      if (result.outcome === 'failed') {
         item.status = 'error';
         item.progress = 0;
-        item.error = readErrorDetail(xhr);
-
+        // Every failure path carries a message: the server's own detail for a
+        // refused upload, the translated network error when it never answered.
+        item.error = result.errorDetail;
         m.redraw();
-        resolve('failed');
-      };
 
-      xhr.onerror = () => {
-        item.xhr = null;
-        item.status = 'error';
-        item.progress = 0;
-        item.error = extractText(app.translator.trans('core.lib.error.network_error_message'));
-        m.redraw();
-        resolve('failed');
-      };
+        return 'failed' as const;
+      }
 
-      // Aborting must resolve the promise too, or the sequential upload
-      // chain in submit() would hang forever after a cancel.
-      xhr.onabort = () => {
-        item.xhr = null;
-        resolve('aborted');
-      };
-
-      xhr.open('POST', `${app.forum.attribute('apiUrl')}/waterfall-images`);
-      xhr.setRequestHeader('X-CSRF-Token', app.session.csrfToken);
-      xhr.send(body);
+      return 'aborted' as const;
     });
   }
 
   protected cancelItem(item: QueueItem): void {
     item.xhr?.abort();
     item.xhr = null;
-    // Flag first, then reset: the abort resolution re-enters the sequential
-    // upload chain, which must skip this item (see uploadQueue).
+    // abort() resolves the request synchronously, but the chain that continues
+    // from it runs a microtask later — so the flag is set here, while this call
+    // is still on the stack, and uploadQueue finds it set and skips the item.
     item.cancelled = true;
     item.status = 'ready';
     item.progress = 0;
