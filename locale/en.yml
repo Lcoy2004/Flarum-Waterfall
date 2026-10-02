@@ -91,9 +91,13 @@ lcoy-waterfall:
       upload_url_placeholder: "https://your.domain/upload"
       upload_url_help: "Endpoint of the external image host that accepts POST uploads. Must start with http:// or https://."
       extra_params_label: "Extra params (JSON object)"
-      extra_params_placeholder: '{"key": "value"}'
+      # Flarum parses every translation as an ICU message pattern, where a bare
+      # `{` opens a placeholder. A literal brace therefore has to be quoted as
+      # `'{'` / `'}'`. Unquoted, these two examples fail to parse and `trans()`
+      # throws — which takes the whole admin page down, not just this field.
+      extra_params_placeholder: "'{'\"key\": \"value\"'}'"
       extra_headers_label: "Extra headers (JSON object)"
-      extra_headers_placeholder: '{"Authorization": "Bearer token"}'
+      extra_headers_placeholder: "'{'\"Authorization\": \"Bearer token\"'}'"
       extra_headers_help: "Sent as HTTP headers with every image host request, e.g. a Bearer token for Lsky Pro."
       basic_auth_user_label: "Basic Auth username"
       basic_auth_pass_label: "Basic Auth password"

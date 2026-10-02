@@ -91,9 +91,12 @@ lcoy-waterfall:
       upload_url_placeholder: "https://your.domain/upload"
       upload_url_help: "外部图床接收 POST 上传的接口地址,须以 http:// 或 https:// 开头。"
       extra_params_label: "附加参数(JSON 对象)"
-      extra_params_placeholder: '{"key": "value"}'
+      # Flarum 会把每条翻译当作 ICU 消息模板解析,裸的 `{` 会被当成占位符,
+      # 所以字面量的花括号必须写成 `'{'` / `'}'`。不转义就无法解析,`trans()`
+      # 会抛错,整个后台页面都会挂掉,而不只是用到它的那个字段。
+      extra_params_placeholder: "'{'\"key\": \"value\"'}'"
       extra_headers_label: "附加请求头(JSON 对象)"
-      extra_headers_placeholder: '{"Authorization": "Bearer token"}'
+      extra_headers_placeholder: "'{'\"Authorization\": \"Bearer token\"'}'"
       extra_headers_help: "随每次图床请求发送的 HTTP 请求头,例如 Lsky Pro 的 Bearer Token。"
       basic_auth_user_label: "Basic Auth 用户名"
       basic_auth_pass_label: "Basic Auth 密码"
