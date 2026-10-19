@@ -177,10 +177,24 @@ class WaterfallSetResource extends AbstractDatabaseResource
             // The lightbox fetches the set's first page through this include;
             // order is the uploader-defined position, bounded to
             // MAX_IMAGES_INCLUDE rows (further pages come from filter[set]).
+            //
+            // Visibility is applied here as well as in the endpoints'
+            // eagerLoadWhere(), because the two are one rule and must not be
+            // able to disagree. For this resource's own Index and Show the
+            // eagerLoadWhere is what runs — the buffer skips a relation that is
+            // already loaded — so this scope is the definition every *other*
+            // path falls back to (EloquentBuffer invokes it with the context).
+            // Left unscoped it would hand a set's pending and failed images to
+            // whoever read them through such a path: the same leak the Show
+            // endpoint's comment describes, just reached from elsewhere.
             Schema\Relationship\ToMany::make('images')
                 ->type('waterfall-images')
                 ->includable()
-                ->scope(fn (HasMany $query) => $query->orderBy('position')->orderBy('id')->limit(static::MAX_IMAGES_INCLUDE)),
+                ->scope(function (HasMany $query, FlarumContext $context) {
+                    $query->visibleTo($context->getActor());
+
+                    return $query->orderBy('position')->orderBy('id')->limit(static::MAX_IMAGES_INCLUDE);
+                }),
         ];
     }
 
