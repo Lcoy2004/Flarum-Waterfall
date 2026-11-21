@@ -27,6 +27,11 @@ use Psr\Http\Server\RequestHandlerInterface;
  * thirty transactions. This endpoint takes the batch instead: one boot, and a
  * handful of statements for the counters.
  *
+ * The counters themselves are merged asynchronously (ViewRecorder::
+ * recordDeferred): a report adds to a delta row, and a delayed job moves the
+ * accumulated deltas into the image and set rows. The response therefore
+ * reports what was accepted for counting, not a counter value to display.
+ *
  * What is counted is defined by ViewRecorder, which the per-image view endpoint
  * adapts to as well, so the two surfaces can never disagree on the rule.
  */
@@ -45,7 +50,7 @@ class RecordViewsController implements RequestHandlerInterface
         // refusal.
         $ids = (array) (((array) $request->getParsedBody())['ids'] ?? []);
 
-        $counted = $this->recorder->record(
+        $counted = $this->recorder->recordDeferred(
             $ids,
             (string) $request->getAttribute('ipAddress', '')
         );

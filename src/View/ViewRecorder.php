@@ -11,8 +11,10 @@
 
 namespace Lcoy\Waterfall\View;
 
+use Carbon\Carbon;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Queue\Queue;
+use Lcoy\Waterfall\Jobs\FlushViewDeltasJob;
 use Lcoy\Waterfall\Jobs\RecalculateScoresJob;
 use Lcoy\Waterfall\Model\WaterfallImage;
 use Lcoy\Waterfall\Model\WaterfallSet;
@@ -46,6 +48,33 @@ class ViewRecorder
      */
     public const MAX_IDS = 100;
 
+    /**
+     * How long the batch path may leave a view in the delta buffer before it is
+     * moved into the counters, in seconds.
+     *
+     * A view used to take the owning image's and set's row locks immediately.
+     * A popular image is what everyone contends on, so the lock — not the
+     * arithmetic — was the cost. Short enough that a reader never sees a badly
+     * stale badge, long enough that a burst of lightbox reports coalesces into
+     * a single locked update.
+     */
+    public const FLUSH_DELAY_SECONDS = 20;
+
+    /**
+     * Cache key that deduplicates the flush scheduling: only the first view
+     * report in the window arms a job, so a burst of reports arms one flush
+     * rather than one per request.
+     */
+    public const FLUSH_FLAG = 'lcoy-waterfall.views.flush';
+
+    /**
+     * How long the flag may live. It is normally forgotten by the flush job as
+     * soon as it starts; the TTL only bounds how long a push failure (or a
+     * worker restart) can hold the flag, since it expires on its own and the
+     * next report arms another flush.
+     */
+    public const FLUSH_FLAG_TTL = 60;
+
     public function __construct(
         protected CacheRepository $cache,
         protected Queue $queue,
@@ -67,13 +96,90 @@ class ViewRecorder
      */
     public function record(array $imageIds, string $ip): array
     {
+        [$images, $counted] = $this->claimViews($imageIds, $ip);
+
+        if ($counted === []) {
+            return [];
+        }
+
+        $applied = $this->applyCounters(array_keys($counted));
+
+        // Queueing is decided by the window rather than by what was applied:
+        // the job recomputes the score from the counters, so a row that did not
+        // survive is harmless there, and skipping it would just delay the
+        // recalculation for the rows that did.
+        $this->queueRecalculations($images, $counted);
+
+        return $applied;
+    }
+
+    /**
+     * Record one view for each published image in $imageIds without taking the
+     * counter rows' locks: the views are added to the delta buffer (see
+     * FlushViewDeltasJob) and moved into the counters by a delayed job.
+     *
+     * What is counted is identical to record() — same per-IP window, same
+     * published-only rule — because both go through claimViews(). Only the
+     * write differs. The return value is therefore what was accepted for
+     * counting; it can still be dropped at flush time if the image was deleted
+     * in between (there is no row left to carry it), which is the same outcome
+     * the synchronous path reports.
+     *
+     * The cache is what deduplicates the flush, so when it is unreachable this
+     * falls back to the synchronous path: a cache outage means no dedupe, and
+     * one job per report would be worse than the locks the buffer removes.
+     *
+     * @param  int[]  $imageIds
+     * @return int[] the ids whose view was accepted
+     */
+    public function recordDeferred(array $imageIds, string $ip): array
+    {
+        [$images, $counted] = $this->claimViews($imageIds, $ip);
+
+        if ($counted === []) {
+            return [];
+        }
+
+        $ids = array_keys($counted);
+
+        $armed = $this->claimFlushFlag();
+
+        // The cache is unreachable, so a flush cannot be deduplicated: count
+        // synchronously instead of buffering, which is the pre-buffer path.
+        if ($armed === null) {
+            $applied = $this->applyCounters($ids);
+            $this->queueRecalculations($images, $counted);
+
+            return $applied;
+        }
+
+        // Buffer before enqueueing: under the sync queue driver the push runs
+        // the job inline, and it must find the delta it was armed for.
+        $this->bufferCounters($ids);
+
+        if ($armed) {
+            $this->enqueueFlush();
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Apply the per-IP window to the published images of a batch — the part of
+     * counting that must not differ between the synchronous and buffered paths.
+     *
+     * @param  int[]  $imageIds
+     * @return array{0: iterable<WaterfallImage>, 1: array<int, bool>}
+     */
+    protected function claimViews(array $imageIds, string $ip): array
+    {
         $ids = array_values(array_unique(array_filter(
             array_map('intval', $imageIds),
             fn (int $id): bool => $id > 0
         )));
 
         if ($ids === []) {
-            return [];
+            return [[], []];
         }
 
         $images = WaterfallImage::query()
@@ -95,19 +201,75 @@ class ViewRecorder
             $counted[$image->id] = true;
         }
 
-        if ($counted === []) {
-            return [];
+        return [$images, $counted];
+    }
+
+    /**
+     * Add one to each image's buffered view delta.
+     *
+     * No transaction is needed: insertOrIgnore() is one statement that only
+     * creates the row when it is absent, and increment() is one statement that
+     * is atomic on its own. Ordering the ids keeps every request touching the
+     * buffer's rows in the same order, which is what stops two batches from
+     * deadlocking on overlapping ids.
+     *
+     * @param  int[]  $imageIds
+     */
+    protected function bufferCounters(array $imageIds): void
+    {
+        $ids = array_values(array_unique(array_map('intval', $imageIds)));
+        sort($ids);
+
+        $now = Carbon::now();
+        $table = (new WaterfallImage)->getConnection()->table('waterfall_view_deltas');
+
+        $table->insertOrIgnore(array_map(
+            fn (int $id): array => ['image_id' => $id, 'delta' => 0, 'updated_at' => $now],
+            $ids
+        ));
+
+        $table->whereIn('image_id', $ids)->increment('delta', 1, ['updated_at' => $now]);
+    }
+
+    /**
+     * Claim this window's right to arm the flush.
+     *
+     * @return bool|null true when this report armed the flush, false when one
+     *                   was already armed, null when the cache could not be
+     *                   reached (the caller must count synchronously then,
+     *                   because buffering without a way to dedupe the flush
+     *                   would leave the counters behind).
+     */
+    protected function claimFlushFlag(): ?bool
+    {
+        try {
+            // add() is atomic (SETNX / transactional under the database store):
+            // exactly one report per window arms the job.
+            return (bool) $this->cache->add(self::FLUSH_FLAG, 1, self::FLUSH_FLAG_TTL);
+        } catch (\Throwable $e) {
+            $this->logger->warning('lcoy-waterfall: the view flush could not be armed ({message}); counting synchronously', [
+                'message' => $e->getMessage(),
+            ]);
+
+            return null;
         }
+    }
 
-        $applied = $this->applyCounters(array_keys($counted));
-
-        // Queueing is decided by the window rather than by what was applied:
-        // the job recomputes the score from the counters, so a row that did not
-        // survive is harmless there, and skipping it would just delay the
-        // recalculation for the rows that did.
-        $this->queueRecalculations($images, $counted);
-
-        return $applied;
+    /**
+     * Queue the delayed flush. A failure here does not lose the deltas: they
+     * are already in the table, and the flag expires on its own
+     * (FLUSH_FLAG_TTL), after which the next report arms another flush — the
+     * outage delays the counters rather than dropping them.
+     */
+    protected function enqueueFlush(): void
+    {
+        try {
+            $this->queue->later(self::FLUSH_DELAY_SECONDS, new FlushViewDeltasJob());
+        } catch (\Throwable $e) {
+            $this->logger->error('lcoy-waterfall: the view flush could not be queued ({message}); deltas stay buffered', [
+                'message' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -224,11 +386,35 @@ class ViewRecorder
      */
     protected function queueRecalculations(iterable $images, array $counted): void
     {
-        $recalculate = [];
+        $ids = [];
 
         foreach ($images as $image) {
-            if (isset($counted[$image->id]) && $this->claimWindow('lcoy-waterfall.score.'.$image->id)) {
-                $recalculate[] = $image->id;
+            if (isset($counted[$image->id])) {
+                $ids[] = $image->id;
+            }
+        }
+
+        $this->queueScoreRecalculation($ids);
+    }
+
+    /**
+     * Queue the coalesced score recalculation for a set of image ids.
+     *
+     * Public because the flush job is the one that knows which counters moved:
+     * a buffered view is not scored until its delta reaches the row, so the
+     * recalculation is queued from there rather than at report time. The
+     * per-image window keeps the "at most one recompute per image per minute"
+     * rule that the synchronous path has always had.
+     *
+     * @param  int[]  $imageIds
+     */
+    public function queueScoreRecalculation(array $imageIds): void
+    {
+        $recalculate = [];
+
+        foreach (array_unique(array_map('intval', $imageIds)) as $id) {
+            if ($id > 0 && $this->claimWindow('lcoy-waterfall.score.'.$id)) {
+                $recalculate[] = $id;
             }
         }
 
