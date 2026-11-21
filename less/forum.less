@@ -195,7 +195,7 @@
     grid-template-columns: repeat(auto-fill, minmax(~"min(var(--waterfall-card-min, 280px), 45%)", 1fr));
     // The gutter comes from the admin setting (--waterfall-gutter, set inline
     // by WaterfallGrid) and is deliberately not overridden per breakpoint.
-    gap: var(--waterfall-gutter, 12px);
+    gap: var(--waterfall-gutter, 16px);
   }
 
   &-state {
@@ -259,11 +259,13 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  background: var(--control-bg);
-  // Flarum's own radius token: the chrome (chips, inputs, avatars) is all
-  // rounded, so a sharp-cornered card read as unfinished next to it.
-  border-radius: var(--border-radius);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  // No box of its own. In a gallery the photograph *is* the card, and a second
+  // surface behind it (background + shadow + radius) made the feed read as a
+  // list of tiles rather than a wall of pictures. The radius lives on the
+  // figure; the caption sits on the page.
+  background: transparent;
+  // Still clipped: the touch gesture slides the content sideways and must not
+  // paint past the card's edges.
   overflow: hidden;
   // The card is its own size context: its chrome is tuned by how wide the
   // card actually is (see the @container query below), not by the viewport.
@@ -271,14 +273,6 @@
   // e.g. a phone held in landscape, or a desktop window where an extra
   // column fits — which a media query could never track.
   container-type: inline-size;
-  // The card itself does not move on hover — the picture inside it does.
-  // Lifting a screenful of cards at once read as the layout being unstable,
-  // which is the opposite of what a gallery wants.
-  transition: box-shadow 160ms ease-out;
-
-  &:hover {
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
-  }
 
   &-figure {
     position: relative;
@@ -290,6 +284,8 @@
     // and nothing shifts when the image lands. Rows published before the
     // ratio was recorded keep the 3:4 frame.
     aspect-ratio: var(--wf-ratio, 3 / 4);
+    // The admin's card-radius setting, carried on the card as `--wf-radius`.
+    border-radius: var(--wf-radius, 12px);
     padding: 0;
     border: 0;
     background: var(--control-bg);
@@ -532,13 +528,15 @@
     // proportion whether the grid gives it 170px or 400px, and the clamps only
     // exist to keep type readable at the extremes; there is no breakpoint and
     // no per-device value anywhere.
-    gap: clamp(4px, 1.6cqi, 6px);
-    padding: ~"clamp(7px, 1.2cqi + 6px, 10px)";
+    gap: ~"clamp(3px, 1.2cqi, 5px)";
+    // Nearly flush with the picture's edges: the caption belongs to the same
+    // column as the photograph, not to an inset panel beneath a card.
+    padding: 8px 2px 0;
     // Fixed height, and it is load-bearing: the grid derives each card's total
     // height from its image ratio plus this strip, without measuring anything.
     // `--wf-info-height` is read back by the layout script, so the stylesheet
     // and the geometry can never disagree.
-    height: var(--wf-info-height, 80px);
+    height: var(--wf-info-height, 72px);
     box-sizing: border-box;
     overflow: hidden;
   }
@@ -655,23 +653,22 @@
 
   &-tag {
     max-width: 100%;
-    padding: 1px @wf-inset;
-    border-radius: 999px;
-    // The card itself is control-bg, so the chip needs a tinted fill to be
-    // legible in both light and dark themes without a hard border. Mixing
-    // towards control-bg (an opaque mix) instead of transparent: a 14%
-    // transparent tint all but disappears against the dark-theme control-bg
-    // (only ~3% lightness apart), while this stays ~11-13% apart in both.
-    // 16%, down from 30%: at the old weight a row of chips read as a second
-    // row of titles. Tags are metadata and should sit behind the picture.
-    background: color-mix(in srgb, var(--control-color) 16%, var(--control-bg));
+    // Plain muted text with a quiet separator, not a pill: at pill weight a
+    // row of chips read as a second row of titles and pulled the eye off the
+    // photograph.
     color: var(--muted-color);
     font-size: ~"clamp(10px, 0.35cqi + 9.4px, 11px)";
-    line-height: 1.7;
+    line-height: 1.6;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     transition: color 150ms ease;
+
+    & + &::before {
+      content: "·";
+      margin: 0 4px;
+      opacity: 0.55;
+    }
   }
 
   &:hover &-tag {
@@ -1422,7 +1419,7 @@
 .WaterfallGrid-grid {
   // Height of the info strip. Inherited by every card and read back by the
   // layout script, so the geometry and the stylesheet cannot drift apart.
-  --wf-info-height: 80px;
+  --wf-info-height: 72px;
 
   // Tier 1: the engine balances the columns itself.
   &--native-masonry {
@@ -1439,7 +1436,7 @@
       position: absolute;
       top: 0;
       left: 0;
-      width: ~"calc((100% - (var(--waterfall-cols) - 1) * var(--waterfall-gutter, 12px)) / var(--waterfall-cols))";
+      width: ~"calc((100% - (var(--waterfall-cols) - 1) * var(--waterfall-gutter, 16px)) / var(--waterfall-cols))";
       transform: translate(var(--wf-x, 0px), var(--wf-y, 0px));
     }
   }
@@ -1492,10 +1489,18 @@
   z-index: 1;
   display: flex;
   flex-direction: column;
-  background: var(--control-bg);
+  // Transparent like the card itself — the caption sits on the page. It turns
+  // opaque only while the gesture is running (below), because otherwise the
+  // action colour behind would show through the photograph as it slides.
+  background: transparent;
   // Vertical scrolling stays the browser's; slidable claims the gesture only
   // once it sees a horizontal drag.
   touch-action: pan-y;
+}
+
+// `.sliding` is added to the card by slidable for the duration of the drag.
+.WaterfallCard.sliding .Slidable-content {
+  background: var(--control-bg);
 }
 
 // -- Card like control -------------------------------------------------------
@@ -1547,8 +1552,7 @@
     // One column: the card is the full width now, so the breathing room comes
     // from the picture rather than from the margins.
     grid-template-columns: 1fr;
-    gap: 10px;
-    --wf-info-height: 76px;
+    --wf-info-height: 68px;
   }
 
   // The hero's labelled button is replaced by the floating one; two upload

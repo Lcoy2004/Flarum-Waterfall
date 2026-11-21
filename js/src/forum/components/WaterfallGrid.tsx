@@ -29,7 +29,7 @@ export interface WaterfallGridAttrs {
 let cardGutter: number | null = null;
 
 function cardGutterSetting(): number {
-  return (cardGutter ??= app.forum.attribute<number>('waterfallCardGutter') ?? 12);
+  return (cardGutter ??= app.forum.attribute<number>('waterfallCardGutter') ?? 16);
 }
 
 /**

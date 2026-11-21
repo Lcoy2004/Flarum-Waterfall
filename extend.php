@@ -13,6 +13,7 @@ use Flarum\Api\Resource\ForumResource;
 use Flarum\Extend;
 use Flarum\Search\Database\DatabaseSearchDriver;
 use Lcoy\Waterfall\Api\Controller\RecordViewsController;
+use Lcoy\Waterfall\Api\Controller\WaterfallSetStatusController;
 use Lcoy\Waterfall\Api\Controller\TestImageHostController;
 use Lcoy\Waterfall\Api\WaterfallImageResource;
 use Lcoy\Waterfall\Api\WaterfallSetResource;
@@ -55,7 +56,11 @@ return [
     // is most of what makes a per-image request expensive.
     (new Extend\Routes('api'))
         ->post('/waterfall/test-host', 'waterfall.test-host', TestImageHostController::class)
-        ->post('/waterfall-images/views', 'waterfall.views', RecordViewsController::class),
+        ->post('/waterfall-images/views', 'waterfall.views', RecordViewsController::class)
+        // The feed's poll target. A dedicated path rather than a JSON:API
+        // request: the page only compares a status string, and a document
+        // build with includes is most of what made each poll expensive.
+        ->get('/waterfall/set-status', 'waterfall.set-status', WaterfallSetStatusController::class),
 
     // Expose the upload permission on the forum document so the frontend can
     // show or hide the upload button without an extra request.
@@ -135,8 +140,8 @@ return [
         ->default('lcoy-waterfall.weight_recency', 1.0)
         ->default('lcoy-waterfall.decay_lambda', 0.05)
         ->default('lcoy-waterfall.per_page', 24)
-        ->default('lcoy-waterfall.card_radius', 8)
-        ->default('lcoy-waterfall.card_gutter', 12)
+        ->default('lcoy-waterfall.card_radius', 12)
+        ->default('lcoy-waterfall.card_gutter', 16)
         ->default('lcoy-waterfall.show_like_button', true)
         ->default('lcoy-waterfall.slideshow_images', 3)
         ->default('lcoy-waterfall.local_relay', false)

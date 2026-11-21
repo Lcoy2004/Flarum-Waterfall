@@ -21,17 +21,33 @@ const makeSet = (id: string, status = 'pending') =>
   });
 
 const attributes: Record<string, unknown> = {
+  apiUrl: 'http://localhost/api',
   waterfallPerPage: 24,
   waterfallPollInterval: 5,
   waterfallSlideshowImages: 3,
 };
 
-/** Requests the state makes, recorded as `[resource, ids, options]`. */
-function recordRequests(): unknown[][] {
+/**
+ * Record what the state asks for.
+ *
+ * The status poll and the feed backfill are different transports now, so both
+ * are captured: `polls` is every status request, `calls` every feed request —
+ * the includes only the backfill pays for.
+ */
+function recordRequests(statuses: Record<string, string> = {}) {
   const calls: unknown[][] = [];
+  const polls: { url: string }[] = [];
 
   (app as any).forum = { attribute: (key: string) => attributes[key] };
   (app as any).alerts = { show: () => {} };
+  (app as any).translator = { trans: (key: string) => key };
+
+  (app as any).request = (options: { url: string }) => {
+    polls.push(options);
+
+    return Promise.resolve(statuses);
+  };
+
   (app as any).store = {
     find: (resource: unknown, ids: unknown, options: unknown) => {
       calls.push([resource, ids, options]);
@@ -40,7 +56,7 @@ function recordRequests(): unknown[][] {
     },
   };
 
-  return calls;
+  return { calls, polls };
 }
 
 /** Let the request's promise chain settle. */
@@ -48,9 +64,21 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const includes = (calls: unknown[][], index: number) => (calls[index][2] as { include: string }).include;
 
+/**
+ * jsdom always reports the tab as visible and offers no setter, so the state's
+ * pause-on-hidden path is driven through an own property. It shadows the
+ * prototype getter for this file only, which is why the default is "visible".
+ */
+let visibility: 'visible' | 'hidden' = 'visible';
+
+Object.defineProperty(document, 'visibilityState', {
+  configurable: true,
+  get: () => visibility,
+});
+
 describe('WaterfallState polling', () => {
-  it('polls without the slideshow include', async () => {
-    const calls = recordRequests();
+  it('polls the status endpoint instead of the feed', async () => {
+    const { calls, polls } = recordRequests({ '1': 'pending' });
     const state = new WaterfallState();
 
     state.sets = [makeSet('1')];
@@ -58,25 +86,16 @@ describe('WaterfallState polling', () => {
     (state as any).refreshPending();
     await settle();
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0][0]).toBe('waterfall-sets');
-    expect(calls[0][1]).toEqual(['1']);
-    expect(includes(calls, 0)).toBe('user,coverImage');
+    // One small status request and no feed request: while a set is still
+    // transferring there is no cover or slideshow to fetch.
+    expect(polls).toHaveLength(1);
+    expect(polls[0].url).toContain('/waterfall/set-status?ids=1');
+    expect(calls).toHaveLength(0);
   });
 
-  it('backfills the slideshow images of a set that published', async () => {
+  it('applies the answer and backfills what published', async () => {
     const published = makeSet('2');
-    const calls = recordRequests();
-
-    // The store mutates the model in place when the response arrives — that is
-    // how a pending card turns into a published one.
-    (app as any).store.find = (resource: unknown, ids: unknown, options: unknown) => {
-      calls.push([resource, ids, options]);
-      published.pushAttributes({ status: 'published' });
-
-      return Promise.resolve([]);
-    };
-
+    const { calls } = recordRequests({ '2': 'published' });
     const state = new WaterfallState();
 
     state.sets = [published];
@@ -84,23 +103,17 @@ describe('WaterfallState polling', () => {
     (state as any).refreshPending();
     await settle();
 
-    expect(calls).toHaveLength(2);
-    expect(includes(calls, 0)).toBe('user,coverImage');
-    expect(includes(calls, 1)).toBe('user,coverImage,images');
-    expect(calls[1][1]).toEqual(['2']);
+    expect(published.status()).toBe('published');
+
+    // The cover and slideshow are fetched once, now that they exist.
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1]).toEqual(['2']);
+    expect(includes(calls, 0)).toBe('user,coverImage,images');
   });
 
   it('does not backfill a set that failed', async () => {
     const failed = makeSet('3');
-    const calls = recordRequests();
-
-    (app as any).store.find = (resource: unknown, ids: unknown, options: unknown) => {
-      calls.push([resource, ids, options]);
-      failed.pushAttributes({ status: 'failed' });
-
-      return Promise.resolve([]);
-    };
-
+    const { calls } = recordRequests({ '3': 'failed' });
     const state = new WaterfallState();
 
     state.sets = [failed];
@@ -108,8 +121,9 @@ describe('WaterfallState polling', () => {
     (state as any).refreshPending();
     await settle();
 
-    // Only the poll: a failed set has no images to ask for.
-    expect(calls).toHaveLength(1);
+    expect(failed.status()).toBe('failed');
+    // A failed set has no images to ask for.
+    expect(calls).toHaveLength(0);
   });
 
   it('starts fast, then backs off to the ceiling', () => {
@@ -138,35 +152,24 @@ describe('WaterfallState polling', () => {
   });
 
   it('does not count a backfill that throws as a poll failure', async () => {
-    const published = makeSet('6');
-    const calls = recordRequests();
+    const { calls } = recordRequests({ '6': 'published' });
 
     // The poll succeeds, and the backfill that follows it blows up
     // synchronously — a request that never left must not be reported to the
     // reader as "the status could not be refreshed".
-    let pollDone = false;
-
     (app as any).store.find = (resource: unknown, ids: unknown, options: unknown) => {
       calls.push([resource, ids, options]);
-
-      if (!pollDone) {
-        pollDone = true;
-        published.pushAttributes({ status: 'published' });
-
-        return Promise.resolve([]);
-      }
 
       throw new Error('the backfill request could not be created');
     };
 
     const state = new WaterfallState();
 
-    state.sets = [published];
+    state.sets = [makeSet('6')];
 
     (state as any).refreshPending();
     await settle();
 
-    expect(calls).toHaveLength(2);
     expect((state as any).pollFailures).toBe(0);
   });
 
@@ -180,6 +183,31 @@ describe('WaterfallState polling', () => {
     (state as any).startPollingIfNeeded();
 
     expect((state as any).pollTimer).toBeNull();
+  });
+
+  it('parks the armed check while the tab is hidden, and checks again on return', async () => {
+    const { polls } = recordRequests({ '1': 'pending' });
+    const state = new WaterfallState();
+
+    state.sets = [makeSet('1')];
+
+    (state as any).startPollingIfNeeded();
+    expect((state as any).pollTimer).not.toBeNull();
+
+    // A background tab has nobody reading it, so the countdown is dropped
+    // rather than left to fire throttled requests for minutes.
+    visibility = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect((state as any).pollTimer).toBeNull();
+
+    // Coming back means one check now, and a re-armed chain: the timer
+    // callback that normally re-arms it was the one that got dropped.
+    visibility = 'visible';
+    document.dispatchEvent(new Event('visibilitychange'));
+    await settle();
+
+    expect(polls).toHaveLength(1);
+    expect((state as any).pollTimer).not.toBeNull();
   });
 });
 

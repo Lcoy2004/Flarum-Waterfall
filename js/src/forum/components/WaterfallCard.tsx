@@ -47,7 +47,7 @@ function prefersReducedMotion(): boolean {
 }
 
 function cardRadiusSetting(): number {
-  return (cardRadius ??= app.forum.attribute<number>('waterfallCardRadius') ?? 8);
+  return (cardRadius ??= app.forum.attribute<number>('waterfallCardRadius') ?? 12);
 }
 
 function slideshowImageLimit(): number {
@@ -544,7 +544,9 @@ export default class WaterfallCard<CustomAttrs extends WaterfallCardAttrs = Wate
     const ratio = cover?.aspectRatio() ?? DEFAULT_RATIO;
 
     const cardStyle: Record<string, string> = {
-      borderRadius: `${radius}px`,
+      // The radius belongs to the picture, not to a card box around it; the
+      // stylesheet reads it from here so the admin setting still wins.
+      '--wf-radius': `${radius}px`,
       '--wf-ratio': String(ratio),
     };
 
