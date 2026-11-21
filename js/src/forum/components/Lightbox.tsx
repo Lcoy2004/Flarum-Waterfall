@@ -456,9 +456,16 @@ export default class Lightbox<CustomAttrs extends LightboxAttrs = LightboxAttrs>
       if (this.scale <= 1 && start) {
         const dx = e.clientX - start.x;
         const dy = e.clientY - start.y;
+        const released = e.type === 'pointerup';
 
-        if (e.type === 'pointerup' && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        if (released && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.2) {
           this.navigate(dx < 0 ? 1 : -1);
+        } else if (released && dy > 120 && dy > Math.abs(dx) * 1.2) {
+          // Down, decisively, and more down than sideways: the gesture a
+          // phone's photo viewer uses to dismiss. Only reachable un-zoomed
+          // (this branch is scoped to scale <= 1), so it can never fight the
+          // panning of an enlarged picture.
+          this.attrs.onClose();
         } else {
           // Not a swipe: an image that fits the stage never stays displaced —
           // spring back (the img's transform transition animates it), keeping

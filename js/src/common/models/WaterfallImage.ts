@@ -23,6 +23,14 @@ export default class WaterfallImage extends Model {
   score() {
     return Model.attribute<number, number | null | undefined>('score', (value) => value ?? 0).call(this);
   }
+  /**
+   * width / height of the stored picture, orientation applied; null on rows
+   * published before the ratio was recorded. The feed reserves the card's box
+   * from this before the bytes arrive.
+   */
+  aspectRatio() {
+    return Model.attribute<number | null | undefined>('aspectRatio').call(this);
+  }
   status() {
     return Model.attribute<string, string | null | undefined>('status', (value) => value ?? 'pending').call(this);
   }

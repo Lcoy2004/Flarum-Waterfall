@@ -68,11 +68,18 @@ export default class WaterfallState {
   protected visibilityHandler: (() => void) | null = null;
 
   /**
-   * Ceiling for the polling backoff (see schedulePoll). Long enough to make a
-   * slow transfer cheap to watch, short enough that a card still resolves
-   * while the reader is looking at the feed.
+   * The first status check after a card turns pending. Short on purpose: a
+   * transfer that finishes in seconds should resolve while the reader is
+   * still looking at the card.
    */
-  protected static readonly POLL_MAX_INTERVAL = 30000;
+  protected static readonly POLL_FIRST_DELAY = 2000;
+
+  /**
+   * Ceiling for the backoff. Long enough that a slow transfer costs a handful
+   * of requests instead of a steady drumbeat, short enough that a card still
+   * resolves while the reader is on the page.
+   */
+  protected static readonly POLL_MAX_INTERVAL = 12000;
 
   /**
    * Bumped by every load(). Responses carry the epoch they were started
@@ -278,17 +285,22 @@ export default class WaterfallState {
   }
 
   /**
-   * How long this tick waits before checking: the configured interval,
-   * doubling with every check that still found the set pending, and never
-   * longer than POLL_MAX_INTERVAL — unless the admin configured something
-   * slower than that cap, in which case their setting wins: a cap is there to
-   * stop the backoff from growing without bound, not to interrogate a server
-   * more often than it was told to.
+   * How long this tick waits before checking: 2s for the first one, then
+   * growing geometrically (×1.6) until it reaches the 12s ceiling — unless the
+   * admin configured something slower than that cap, in which case their
+   * setting wins: a cap is there to stop the backoff from growing without
+   * bound, not to interrogate a server more often than it was told to.
    */
   protected pollDelay(): number {
     const cap = Math.max(WaterfallState.POLL_MAX_INTERVAL, this.pollInterval);
 
-    return Math.min(this.pollInterval * 2 ** this.pollTick, cap);
+    if (this.pollTick === 0) {
+      return Math.min(WaterfallState.POLL_FIRST_DELAY, cap);
+    }
+
+    // Rounded: the geometric term accumulates binary fractions (5.12s is
+    // 5.120000000000001), and a timer wants whole milliseconds.
+    return Math.round(Math.min(WaterfallState.POLL_FIRST_DELAY * 1.6 ** this.pollTick, cap));
   }
 
   /**

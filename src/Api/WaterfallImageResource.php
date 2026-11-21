@@ -240,6 +240,14 @@ class WaterfallImageResource extends AbstractDatabaseResource
             Schema\Integer::make('likesCount'),
             Schema\Integer::make('viewsCount'),
             Schema\Number::make('score'),
+            // width / height with orientation applied, written when the row was
+            // published. The feed reserves the card's box from it before the
+            // picture arrives, so a card never changes height when its bytes
+            // land. Null on rows published before the column existed, and for
+            // a file whose size could not be read — the stylesheet then falls
+            // back to a 3:4 frame.
+            Schema\Number::make('aspectRatio')
+                ->nullable(),
             // pending | published | failed
             Schema\Str::make('status'),
             Schema\Str::make('error')

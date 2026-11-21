@@ -6,10 +6,12 @@ import LoadingIndicator from 'flarum/common/components/LoadingIndicator';
 import type { AlertAttrs } from 'flarum/common/components/Alert';
 import classList from 'flarum/common/utils/classList';
 import extractText from 'flarum/common/utils/extractText';
+import slidable from 'flarum/forum/utils/slidable';
 import type Mithril from 'mithril';
 
 import type WaterfallSet from '../../common/models/WaterfallSet';
 import type WaterfallImage from '../../common/models/WaterfallImage';
+import { DEFAULT_RATIO } from '../../common/masonry';
 
 export interface WaterfallCardAttrs {
   set: WaterfallSet;
@@ -19,6 +21,13 @@ export interface WaterfallCardAttrs {
    * holds it back until after layout.
    */
   eager?: boolean;
+  /**
+   * Absolute position inside the script-driven masonry grid. Both are absent
+   * when the engine lays the card out itself (native masonry or the fallback
+   * grid), in which case the stylesheet owns the placement.
+   */
+  x?: number;
+  y?: number;
   onclick: () => void;
   onDelete: (set: WaterfallSet) => void;
 }
@@ -189,6 +198,9 @@ export default class WaterfallCard<CustomAttrs extends WaterfallCardAttrs = Wate
   protected ticking = false;
   protected observedFigure: Element | null = null;
 
+  /** The touch-slide gesture, when the device has one. */
+  protected slider: { reset: () => void } | null = null;
+
   /**
    * Cards are small; arming slightly before they enter the viewport avoids a
    * visible "start" moment at the edge of the screen. Doubles as the key of
@@ -199,6 +211,14 @@ export default class WaterfallCard<CustomAttrs extends WaterfallCardAttrs = Wate
   oncreate(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
     super.oncreate(vnode);
     this.observeFigure();
+
+    // Touch only. The gesture is Flarum's own slidable utility, which binds
+    // jQuery touch handlers and expects the .Slidable-content /
+    // .Slidable-underneath structure rendered below; a desktop pointer never
+    // triggers it, so the cost of attaching is one listener that cannot fire.
+    if ('ontouchstart' in window && this.element) {
+      this.slider = slidable(this.element);
+    }
   }
 
   onupdate(vnode: Mithril.VnodeDOM<CustomAttrs, this>) {
@@ -394,6 +414,96 @@ export default class WaterfallCard<CustomAttrs extends WaterfallCardAttrs = Wate
     return true;
   }
 
+  /**
+   * What the card is showing right now: the rotating slide when the slideshow
+   * is on, its cover otherwise. The swipe actions act on this image, not on
+   * some other member of the set.
+   */
+  protected currentImage(): WaterfallImage | null {
+    const slides = this.slides();
+
+    return slides.length >= 2 ? slides[this.slide] ?? null : this.attrs.set.cover();
+  }
+
+  /** Whether the left-swipe action has anything to do for this viewer. */
+  protected canLike(): boolean {
+    const image = this.currentImage();
+
+    return !!image && !!image.canLike();
+  }
+
+  /**
+   * Like the image on screen, optimistically.
+   *
+   * The badge shows the set's total, so both counters move: the image's own
+   * (which the lightbox reads) and the set's. A failed request puts them both
+   * back rather than leaving a number the server never agreed to.
+   */
+  protected likeCurrent(): void {
+    const image = this.currentImage();
+
+    if (!image || !image.canLike() || image.isLiked()) {
+      return;
+    }
+
+    const set = this.attrs.set;
+    const imageLikes = image.likesCount();
+    const setLikes = set.likesCount();
+
+    image.pushAttributes({ likesCount: imageLikes + 1, isLiked: true });
+    set.pushAttributes({ likesCount: setLikes + 1 });
+    m.redraw();
+
+    app
+      .request({
+        method: 'POST',
+        url: `${app.forum.attribute('apiUrl')}/waterfall-images/${image.id()}/like`,
+      })
+      .catch((error: { alert?: AlertAttrs | null } | null) => {
+        image.pushAttributes({ likesCount: imageLikes, isLiked: false });
+        set.pushAttributes({ likesCount: setLikes });
+
+        if (error?.alert) {
+          app.alerts.show(error.alert, error.alert.content);
+        }
+
+        m.redraw();
+      });
+  }
+
+  /**
+   * Share the feed, or copy its link where the Web Share API is missing.
+   *
+   * There is no public per-set route in this extension, so the set's own page
+   * cannot be linked; the feed is the page the card belongs to, and that is
+   * what can be shared honestly.
+   */
+  protected share(): void {
+    const url = `${app.forum.attribute('baseUrl')}${app.route('lcoy.waterfall')}`;
+    const title = this.attrs.set.title() || '';
+
+    const nav = navigator as Navigator & { share?: (data: { title?: string; url?: string }) => Promise<void> };
+
+    if (typeof nav.share === 'function') {
+      nav.share({ title, url }).catch(() => {});
+
+      return;
+    }
+
+    const announce = () => app.alerts.show({ type: 'success' }, extractText(app.translator.trans('lcoy-waterfall.forum.card.link_copied')));
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(url)
+        .then(announce)
+        .catch(() => window.prompt('', url));
+
+      return;
+    }
+
+    window.prompt('', url);
+  }
+
   view() {
     const { set } = this.attrs;
     const radius = cardRadiusSetting();
@@ -424,167 +534,234 @@ export default class WaterfallCard<CustomAttrs extends WaterfallCardAttrs = Wate
     }
 
     const currentImage = hasSlides ? slides[this.slide] : cover;
+    const likeable = this.canLike();
+    const liked = !!currentImage?.isLiked();
+
+    // The box the picture will occupy, known before it arrives: the cover's
+    // own ratio, or the default frame for rows published before it was
+    // recorded. Every slide is cropped to this box, so rotating the slideshow
+    // never changes the card's height.
+    const ratio = cover?.aspectRatio() ?? DEFAULT_RATIO;
+
+    const cardStyle: Record<string, string> = {
+      borderRadius: `${radius}px`,
+      '--wf-ratio': String(ratio),
+    };
+
+    // Absolute placement, when the grid computes it. Left to the stylesheet
+    // otherwise (native masonry, or the fallback grid).
+    if (typeof this.attrs.x === 'number' && typeof this.attrs.y === 'number') {
+      cardStyle['--wf-x'] = `${this.attrs.x}px`;
+      cardStyle['--wf-y'] = `${this.attrs.y}px`;
+    }
 
     return (
       <div
         className={classList('WaterfallCard', `WaterfallCard--${status}`)}
-        style={{ borderRadius: `${radius}px` }}
+        style={cardStyle}
         role="group"
         aria-label={title || extractText(app.translator.trans('lcoy-waterfall.forum.card.view_button'))}
       >
-        <button
-          type="button"
-          className="WaterfallCard-figure"
-          aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.view_button'))}
-          onclick={this.attrs.onclick}
-          // Pending sets have nothing to show yet (no image has a src), but
-          // failed ones stay openable: the lightbox is where the owner reads
-          // why each image failed.
-          disabled={status === 'pending'}
-          onmouseenter={() => {
-            this.hoverPaused = true;
-            this.stopTimer();
-          }}
-          onmouseleave={() => {
-            this.hoverPaused = false;
-            this.startTimer();
-          }}
-        >
-          {/* Skeleton placeholder with breathing animation until onload. */}
-          {!this.isSlideLoaded(currentImage) && (
-            <div className="WaterfallCard-skeleton" aria-hidden="true">
-              {status === 'pending' && <LoadingIndicator size="small" />}
-            </div>
-          )}
-
-          {status === 'published' && cover && !hasSlides && (
-            <img
-              className={classList('WaterfallCard-img', { 'WaterfallCard-img--loaded': this.isSlideLoaded(cover) })}
-              src={cover.displaySrc()}
-              alt={title}
-              loading={this.attrs.eager ? 'eager' : 'lazy'}
-              fetchpriority={this.attrs.eager ? 'high' : undefined}
-              decoding="async"
-              onload={() => {
-                this.markSlideLoaded(cover);
-              }}
-              onerror={() => {
-                // Never leave the skeleton up forever on a broken image URL;
-                // reveal the (failed) img so the browser's own state shows.
-                this.markSlideLoaded(cover);
-              }}
-            />
-          )}
-
-          {hasSlides &&
-            this.windowSlides(slides).map((image) => {
-              // Only the frame actually on screen inherits the eager hint: the
-              // neighbours the window pre-mounts are there to be ready for the
-              // next tick, not to compete with the cover the reader is waiting
-              // for.
-              const eager = !!this.attrs.eager && image === slides[this.slide];
-
-              return (
-                <img
-                  key={this.slideKey(image)}
-                  className={classList('WaterfallCard-img', 'WaterfallCard-img--slide', {
-                    'WaterfallCard-img--loaded': this.isSlideLoaded(image),
-                    'WaterfallCard-img--active': image === slides[this.slide],
-                  })}
-                  src={image.displaySrc()}
-                  alt={title}
-                  loading={eager ? 'eager' : 'lazy'}
-                  fetchpriority={eager ? 'high' : undefined}
-                  decoding="async"
-                  onload={() => {
-                    this.markSlideLoaded(image);
-                  }}
-                  onerror={() => {
-                    this.markSlideLoaded(image);
-                  }}
-                />
-              );
-            })}
-
-          {imagesCount > 0 && (
-            <span
-              className="WaterfallCard-count"
-              aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.images_count', { count: imagesCount }))}
-            >
-              <i className="far fa-images" aria-hidden="true" /> {imagesCount}
+        {/* Slide actions, revealed by the touch gesture. They sit underneath
+            .Slidable-content, which is the layer that moves; without a touch
+            device they are never shown and the gesture is never attached. */}
+        {likeable && (
+          <button
+            type="button"
+            className="Slidable-underneath Slidable-underneath--left Slidable-underneath--elastic"
+            aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.like_action'))}
+            onclick={() => this.likeCurrent()}
+          >
+            {/* Centring lives on a wrapper: slidable owns the icon's
+                transform (it scales it with the drag), so the icon itself
+                cannot also carry a translate. */}
+            <span className="Slidable-iconWrap">
+              <i className="far fa-heart icon" aria-hidden="true" />
             </span>
-          )}
-
-          {hasSlides && (
-            <span className="WaterfallCard-dots" aria-hidden="true">
-              {slides.map((_, index) => (
-                <span key={index} className={classList('WaterfallCard-dot', { 'WaterfallCard-dot--active': index === this.slide })} />
-              ))}
-            </span>
-          )}
-
-          {status === 'pending' && (
-            <span className="WaterfallCard-badge WaterfallCard-badge--pending">
-              {app.translator.trans('lcoy-waterfall.forum.card.pending_badge')}
-            </span>
-          )}
-
-          {status === 'failed' && (
-            <span className="WaterfallCard-badge WaterfallCard-badge--failed">{app.translator.trans('lcoy-waterfall.forum.card.failed_badge')}</span>
-          )}
-        </button>
-
-        {/* The floating action lives outside the figure button so a tap can
-            never fall through to the lightbox, and it gets a generous,
-            separated touch target. */}
-        {canDelete && (
-          <div className="WaterfallCard-actions">
-            <button
-              type="button"
-              className="WaterfallCard-action WaterfallCard-action--delete"
-              aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.delete_button'))}
-              onclick={() => this.deleteSet(set)}
-            >
-              <i className="fas fa-trash-alt" aria-hidden="true" />
-            </button>
-          </div>
+          </button>
         )}
 
-        <div className="WaterfallCard-info">
-          {this.editing ? this.editTitleView() : this.titleView(title, canRename)}
+        <button
+          type="button"
+          className="Slidable-underneath Slidable-underneath--right Slidable-underneath--elastic"
+          aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.share_action'))}
+          onclick={() => this.share()}
+        >
+          <span className="Slidable-iconWrap">
+            <i className="fas fa-share-alt icon" aria-hidden="true" />
+          </span>
+        </button>
 
-          {tags.length > 0 && (
-            <div className="WaterfallCard-tags">
-              {tags.map((tag) => (
-                <span className="WaterfallCard-tag" key={tag}>
-                  {tag}
-                </span>
-              ))}
+        <div className="Slidable-content">
+          <button
+            type="button"
+            className="WaterfallCard-figure"
+            aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.view_button'))}
+            onclick={this.attrs.onclick}
+            // Pending sets have nothing to show yet (no image has a src), but
+            // failed ones stay openable: the lightbox is where the owner reads
+            // why each image failed.
+            disabled={status === 'pending'}
+            onmouseenter={() => {
+              this.hoverPaused = true;
+              this.stopTimer();
+            }}
+            onmouseleave={() => {
+              this.hoverPaused = false;
+              this.startTimer();
+            }}
+          >
+            {/* Skeleton placeholder with breathing animation until onload. */}
+            {!this.isSlideLoaded(currentImage) && (
+              <div className="WaterfallCard-skeleton" aria-hidden="true">
+                {status === 'pending' && <LoadingIndicator size="small" />}
+              </div>
+            )}
+
+            {status === 'published' && cover && !hasSlides && (
+              <img
+                className={classList('WaterfallCard-img', { 'WaterfallCard-img--loaded': this.isSlideLoaded(cover) })}
+                src={cover.displaySrc()}
+                alt={title}
+                loading={this.attrs.eager ? 'eager' : 'lazy'}
+                fetchpriority={this.attrs.eager ? 'high' : undefined}
+                decoding="async"
+                onload={() => {
+                  this.markSlideLoaded(cover);
+                }}
+                onerror={() => {
+                  // Never leave the skeleton up forever on a broken image URL;
+                  // reveal the (failed) img so the browser's own state shows.
+                  this.markSlideLoaded(cover);
+                }}
+              />
+            )}
+
+            {hasSlides &&
+              this.windowSlides(slides).map((image) => {
+                // Only the frame actually on screen inherits the eager hint: the
+                // neighbours the window pre-mounts are there to be ready for the
+                // next tick, not to compete with the cover the reader is waiting
+                // for.
+                const eager = !!this.attrs.eager && image === slides[this.slide];
+
+                return (
+                  <img
+                    key={this.slideKey(image)}
+                    className={classList('WaterfallCard-img', 'WaterfallCard-img--slide', {
+                      'WaterfallCard-img--loaded': this.isSlideLoaded(image),
+                      'WaterfallCard-img--active': image === slides[this.slide],
+                    })}
+                    src={image.displaySrc()}
+                    alt={title}
+                    loading={eager ? 'eager' : 'lazy'}
+                    fetchpriority={eager ? 'high' : undefined}
+                    decoding="async"
+                    onload={() => {
+                      this.markSlideLoaded(image);
+                    }}
+                    onerror={() => {
+                      this.markSlideLoaded(image);
+                    }}
+                  />
+                );
+              })}
+
+            {imagesCount > 0 && (
+              <span
+                className="WaterfallCard-count"
+                aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.images_count', { count: imagesCount }))}
+              >
+                <i className="far fa-images" aria-hidden="true" /> {imagesCount}
+              </span>
+            )}
+
+            {hasSlides && (
+              <span className="WaterfallCard-dots" aria-hidden="true">
+                {slides.map((_, index) => (
+                  <span key={index} className={classList('WaterfallCard-dot', { 'WaterfallCard-dot--active': index === this.slide })} />
+                ))}
+              </span>
+            )}
+
+            {status === 'pending' && (
+              <span className="WaterfallCard-badge WaterfallCard-badge--pending">
+                {app.translator.trans('lcoy-waterfall.forum.card.pending_badge')}
+              </span>
+            )}
+
+            {status === 'failed' && (
+              <span className="WaterfallCard-badge WaterfallCard-badge--failed">
+                {app.translator.trans('lcoy-waterfall.forum.card.failed_badge')}
+              </span>
+            )}
+          </button>
+
+          {/* The floating action lives outside the figure button so a tap can
+            never fall through to the lightbox, and it gets a generous,
+            separated touch target. */}
+          {canDelete && (
+            <div className="WaterfallCard-actions">
+              <button
+                type="button"
+                className="WaterfallCard-action WaterfallCard-action--delete"
+                aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.delete_button'))}
+                onclick={() => this.deleteSet(set)}
+              >
+                <i className="fas fa-trash-alt" aria-hidden="true" />
+              </button>
             </div>
           )}
 
-          <div className="WaterfallCard-footer">
-            {user && (
-              <Link className="WaterfallCard-user" href={app.route.user(user)}>
-                {/* Flarum's Avatar has no `size` prop — it is sized through
-                    the --size CSS variable (see WaterfallCard-user in
-                    forum.less). */}
-                <Avatar user={user} />
-                <span className="WaterfallCard-username">{user.displayName()}</span>
-              </Link>
+          <div className="WaterfallCard-info">
+            {this.editing ? this.editTitleView() : this.titleView(title, canRename)}
+
+            {tags.length > 0 && (
+              <div className="WaterfallCard-tags">
+                {tags.map((tag) => (
+                  <span className="WaterfallCard-tag" key={tag}>
+                    {tag}
+                  </span>
+                ))}
+              </div>
             )}
 
-            <div className="WaterfallCard-stats">
-              {likesCount > 0 && (
-                <span className="WaterfallCard-stat">
-                  <i className="far fa-heart" aria-hidden="true" /> {likesCount}
-                </span>
+            <div className="WaterfallCard-footer">
+              {user && (
+                <Link className="WaterfallCard-user" href={app.route.user(user)}>
+                  {/* Flarum's Avatar has no `size` prop — it is sized through
+                    the --size CSS variable (see WaterfallCard-user in
+                    forum.less). */}
+                  <Avatar user={user} />
+                  <span className="WaterfallCard-username">{user.displayName()}</span>
+                </Link>
               )}
-              {viewsCount > 0 && (
-                <span className="WaterfallCard-stat">
-                  <i className="far fa-eye" aria-hidden="true" /> {viewsCount}
-                </span>
-              )}
+
+              <div className="WaterfallCard-stats">
+                {likeable ? (
+                  // A real control for pointer users; the same action the
+                  // left-swipe performs on a touch screen.
+                  <button
+                    type="button"
+                    className={classList('WaterfallCard-stat', 'WaterfallCard-like', { 'is-liked': liked })}
+                    aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.card.like_action'))}
+                    onclick={() => this.likeCurrent()}
+                  >
+                    <i className={classList('icon', liked ? 'fas fa-heart' : 'far fa-heart')} aria-hidden="true" /> {likesCount}
+                  </button>
+                ) : (
+                  likesCount > 0 && (
+                    <span className="WaterfallCard-stat">
+                      <i className="far fa-heart" aria-hidden="true" /> {likesCount}
+                    </span>
+                  )
+                )}
+                {viewsCount > 0 && (
+                  <span className="WaterfallCard-stat">
+                    <i className="far fa-eye" aria-hidden="true" /> {viewsCount}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </div>

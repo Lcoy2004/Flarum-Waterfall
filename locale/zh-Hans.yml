@@ -45,6 +45,9 @@ lcoy-waterfall:
       rename_button: "重命名图片集"
       rename_failed: "重命名失败,请稍后重试。"
       title_placeholder: "给这个图片集起个名字"
+      like_action: "点赞这张图片"
+      share_action: "分享"
+      link_copied: "链接已复制。"
     upload_button: "上传图片"
     upload_modal:
       title: "上传图片"

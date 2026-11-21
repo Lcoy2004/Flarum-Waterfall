@@ -299,6 +299,35 @@ class UploadTest extends TestCase
     }
 
     /**
+     * The feed reserves each card's box from the ratio the API reports, before
+     * any bytes arrive, which is what lets the columns balance without ever
+     * measuring an image. So the ratio has to describe the bytes that were
+     * actually transferred — not a default, and not the client's word for it.
+     */
+    #[Test]
+    public function a_published_image_records_the_ratio_of_the_uploaded_bytes()
+    {
+        $container = $this->app()->getContainer();
+
+        $container->instance(ExternalImageHostUploader::class, $this->mockUploader('/file/mock-upload.png'));
+
+        $response = $this->send(
+            $this->request('POST', '/api/waterfall-images', ['authenticatedAs' => 2])
+                ->withUploadedFiles(['file' => $this->widePngUpload()])
+                ->withParsedBody(['title' => 'Wide'])
+        );
+
+        $this->assertEquals(201, $response->getStatusCode());
+
+        $body = json_decode($response->getBody(), true);
+
+        $this->assertEquals(WaterfallImage::STATUS_PUBLISHED, $body['data']['attributes']['status']);
+        // The fixture is 4x2, so the ratio is 2.0, not the 1.0 of a square or
+        // the 0.75 of the stylesheet's fallback frame.
+        $this->assertEqualsWithDelta(2.0, $body['data']['attributes']['aspectRatio'], 0.0001);
+    }
+
+    /**
      * A staged file is only ever worth keeping for a job that is holding it, so
      * every exit that is not a successful push has to take it back.
      *
@@ -884,6 +913,20 @@ class UploadTest extends TestCase
         $path = $this->writeTempFile(base64_decode(self::PNG_1X1), 'png');
 
         return new UploadedFile($path, filesize($path), UPLOAD_ERR_OK, 'test.png', 'image/png');
+    }
+
+    /**
+     * A deliberately non-square PNG, so the recorded ratio can be told apart
+     * from a square image's 1.0 and from the stylesheet's 0.75 fallback.
+     */
+    protected function widePngUpload(): UploadedFile
+    {
+        $path = $this->writeTempFile('', 'png');
+
+        $image = imagecreatetruecolor(4, 2);
+        imagepng($image, $path);
+
+        return new UploadedFile($path, filesize($path), UPLOAD_ERR_OK, 'wide.png', 'image/png');
     }
 
     protected function jpegThumbUpload(): UploadedFile

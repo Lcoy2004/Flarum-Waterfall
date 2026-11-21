@@ -112,24 +112,29 @@ describe('WaterfallState polling', () => {
     expect(calls).toHaveLength(1);
   });
 
-  it('waits longer after every check that found the set still pending', () => {
+  it('starts fast, then backs off to the ceiling', () => {
     const state = new WaterfallState();
 
-    // The configured interval is 5s (see the attributes above).
-    expect((state as any).pollDelay()).toBe(5_000);
+    // The first check comes quickly: a transfer that finished seconds ago
+    // should resolve while the reader is still looking at the card.
+    expect((state as any).pollDelay()).toBe(2_000);
 
+    // Then geometric — 2s, 3.2s, 5.12s, 8.19s — until the 12s ceiling.
     (state as any).pollTick = 1;
-    expect((state as any).pollDelay()).toBe(10_000);
+    expect((state as any).pollDelay()).toBe(3_200);
 
     (state as any).pollTick = 2;
-    expect((state as any).pollDelay()).toBe(20_000);
+    expect((state as any).pollDelay()).toBe(5_120);
 
-    // Capped rather than doubling past it.
     (state as any).pollTick = 3;
-    expect((state as any).pollDelay()).toBe(30_000);
+    expect((state as any).pollDelay()).toBe(8_192);
 
-    (state as any).pollTick = 9;
-    expect((state as any).pollDelay()).toBe(30_000);
+    // Capped rather than growing past it.
+    (state as any).pollTick = 4;
+    expect((state as any).pollDelay()).toBe(12_000);
+
+    (state as any).pollTick = 12;
+    expect((state as any).pollDelay()).toBe(12_000);
   });
 
   it('does not count a backfill that throws as a poll failure', async () => {

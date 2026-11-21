@@ -45,6 +45,9 @@ lcoy-waterfall:
       rename_button: "Rename set"
       rename_failed: "Could not rename the set. Please try again."
       title_placeholder: "Give this set a name"
+      like_action: "Like this image"
+      share_action: "Share"
+      link_copied: "Link copied."
     upload_button: "Upload images"
     upload_modal:
       title: "Upload images"

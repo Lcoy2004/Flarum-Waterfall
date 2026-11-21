@@ -42,12 +42,16 @@ class ImageLifecycle
      * leave the set aggregate to be recomputed a second time (the sync below
      * already covers it).
      *
+     * @param  float|null  $aspectRatio  width / height, orientation applied;
+     *                                   null when the file's size could not be
+     *                                   read, in which case the feed falls back
+     *                                   to its default frame
      * @return bool whether the transition happened. False means the row was
      *              concurrently deleted (e.g. by a queued delete) or is no
      *              longer pending; the caller then treats the transfer as
      *              moot rather than publishing a dead row.
      */
-    public function publish(WaterfallImage $image, string $src, ?string $thumb): bool
+    public function publish(WaterfallImage $image, string $src, ?string $thumb, ?float $aspectRatio = null): bool
     {
         $affected = WaterfallImage::query()
             ->whereKey($image->id)
@@ -55,6 +59,7 @@ class ImageLifecycle
             ->update([
                 'src' => $src,
                 'thumb' => $thumb,
+                'aspect_ratio' => $aspectRatio,
                 'status' => WaterfallImage::STATUS_PUBLISHED,
                 'error' => null,
                 'score' => $this->calculator->calculate($image),

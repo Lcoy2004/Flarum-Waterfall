@@ -150,10 +150,41 @@ export default class WaterfallPage<CustomAttrs extends IWaterfallPageAttrs = IWa
     return <IndexSidebar />;
   }
 
+  /**
+   * The phone's upload entry point.
+   *
+   * A floating button pinned above the safe area rather than a control in the
+   * hero: on a one-column feed the hero is several screens up by the time the
+   * reader has found something worth adding, and a thumb reaches the bottom
+   * corners of the screen, not the top. The stylesheet hides it on wider
+   * screens, where the hero already carries a labelled button.
+   */
+  protected fabView(): Mithril.Children {
+    if (!app.session.user) {
+      return null;
+    }
+
+    const canUpload = app.forum.attribute<boolean | undefined>('waterfallCanUpload');
+
+    return (
+      <Button
+        className="Button Button--primary WaterfallPage-fab"
+        icon="fas fa-cloud-upload-alt"
+        aria-label={extractText(app.translator.trans('lcoy-waterfall.forum.upload_button'))}
+        disabled={!canUpload}
+        onclick={() => {
+          app.modal.show(() => import('./WaterfallUploadModal'), { waterfallState: this.state });
+        }}
+      />
+    );
+  }
+
   content() {
     return (
       <div className="WaterfallPage-content">
         <WaterfallGrid state={this.state} onOpen={(set: WaterfallSet) => this.openLightbox(set)} />
+
+        {this.fabView()}
 
         {this.openSet && !this.openSetLoading && this.openSetImages.length > 0 && (
           <Lightbox

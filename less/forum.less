@@ -271,23 +271,25 @@
   // e.g. a phone held in landscape, or a desktop window where an extra
   // column fits — which a media query could never track.
   container-type: inline-size;
-  // Pixiv-inspired hover: slight lift + deeper, softer shadow (150ms).
-  transition: transform 150ms ease, box-shadow 150ms ease;
+  // The card itself does not move on hover — the picture inside it does.
+  // Lifting a screenful of cards at once read as the layout being unstable,
+  // which is the opposite of what a gallery wants.
+  transition: box-shadow 160ms ease-out;
 
   &:hover {
-    transform: translateY(-3px);
-    // A wider, softer blur keeps the lift visible on dark themes, where a
-    // tight black shadow all but disappears against the body background.
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
   }
 
   &-figure {
     position: relative;
     display: block;
     width: 100%;
-    // Portrait cover (Xiaohongshu-style): a taller 3:4 frame reads as a
-    // photo feed rather than a thumbnail wall.
-    aspect-ratio: 3 / 4;
+    // The picture's own shape, sent by the server and set on the card as
+    // `--wf-ratio`. Reserving it here — before any bytes arrive — is what lets
+    // the feed reserve each card's final height, so the columns can balance
+    // and nothing shifts when the image lands. Rows published before the
+    // ratio was recorded keep the 3:4 frame.
+    aspect-ratio: var(--wf-ratio, 3 / 4);
     padding: 0;
     border: 0;
     background: var(--control-bg);
@@ -347,17 +349,18 @@
     // The transform is the hover zoom below; it stays inert on slideshow
     // frames because the Ken Burns animation's fill-forwards holds the
     // transform property once it has run.
-    transition: opacity 480ms ease, transform 320ms ease;
+    transition: opacity 480ms ease, transform 160ms ease-out;
 
     &--loaded {
       opacity: 1;
     }
   }
 
-  // A breath of zoom into the cover on hover rewards the pointer without
-  // costing layout. Slideshow frames are exempt (see above).
+  // A whisper of zoom on hover: enough to feel alive, small enough that no
+  // neighbour is ever visually disturbed. The frame clips it, so nothing
+  // reflows. Slideshow frames are exempt (see above).
   &:hover &-img--loaded {
-    transform: scale(1.04);
+    transform: scale(1.03);
   }
 
   // Slideshow: the frames around the visible one are stacked in the same box
@@ -531,6 +534,13 @@
     // no per-device value anywhere.
     gap: clamp(4px, 1.6cqi, 6px);
     padding: ~"clamp(7px, 1.2cqi + 6px, 10px)";
+    // Fixed height, and it is load-bearing: the grid derives each card's total
+    // height from its image ratio plus this strip, without measuring anything.
+    // `--wf-info-height` is read back by the layout script, so the stylesheet
+    // and the geometry can never disagree.
+    height: var(--wf-info-height, 80px);
+    box-sizing: border-box;
+    overflow: hidden;
   }
 
   &-titleRow {
@@ -539,7 +549,9 @@
     // rather than floating between two lines of text.
     align-items: flex-start;
     gap: 6px;
-    min-height: 2.8em;
+    // One line, matching the title below: the strip has a fixed height, so a
+    // title that wanted a second line would push the rest out of the box.
+    min-height: 0;
 
     &--editing {
       align-items: center;
@@ -554,12 +566,12 @@
     font-size: ~"clamp(12.5px, 0.6cqi + 11.5px, 13.5px)";
     font-weight: 600;
     line-height: 1.4;
-    // Two lines, then ellipsis (Xiaohongshu-style): a two-line box is enough
-    // for most titles while keeping every card in a row the same height.
+    // One line, then ellipsis: the info strip is a fixed height, so the title
+    // yields to the tags and counters rather than pushing them out of the box.
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
-    min-height: 2.8em;
+    min-height: 0;
     overflow: hidden;
     overflow-wrap: anywhere;
   }
@@ -633,9 +645,12 @@
   // link color on card hover so they reward attention without shouting.
   &-tags {
     display: flex;
-    flex-wrap: wrap;
+    // One row. The strip has a fixed height; wrapping a long tag list would
+    // push the counters out of it, so extra chips are simply not shown.
+    flex-wrap: nowrap;
     gap: ~"clamp(3px, 0.8cqi + 1px, 4px)";
     margin-top: -2px;
+    overflow: hidden;
   }
 
   &-tag {
@@ -647,7 +662,9 @@
     // towards control-bg (an opaque mix) instead of transparent: a 14%
     // transparent tint all but disappears against the dark-theme control-bg
     // (only ~3% lightness apart), while this stays ~11-13% apart in both.
-    background: color-mix(in srgb, var(--control-color) 30%, var(--control-bg));
+    // 16%, down from 30%: at the old weight a row of chips read as a second
+    // row of titles. Tags are metadata and should sit behind the picture.
+    background: color-mix(in srgb, var(--control-color) 16%, var(--control-bg));
     color: var(--muted-color);
     font-size: ~"clamp(10px, 0.35cqi + 9.4px, 11px)";
     line-height: 1.7;
@@ -1394,5 +1411,179 @@
   .WaterfallLightbox-img {
     animation: none;
     transition: none;
+  }
+}
+
+// -- Feed layout tiers -------------------------------------------------------
+//
+// Three ways to place the same cards, best first. WaterfallGrid adds the
+// matching class; the stylesheet only describes what each one means.
+
+.WaterfallGrid-grid {
+  // Height of the info strip. Inherited by every card and read back by the
+  // layout script, so the geometry and the stylesheet cannot drift apart.
+  --wf-info-height: 80px;
+
+  // Tier 1: the engine balances the columns itself.
+  &--native-masonry {
+    grid-template-rows: masonry;
+  }
+
+  // Tier 2: absolute placement computed from the ratios the API sends. The
+  // container's height is set inline; the cards only ever move with
+  // `transform`, so placing them never triggers a reflow.
+  &--js-masonry {
+    position: relative;
+
+    .WaterfallCard {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: ~"calc((100% - (var(--waterfall-cols) - 1) * var(--waterfall-gutter, 12px)) / var(--waterfall-cols))";
+      transform: translate(var(--wf-x, 0px), var(--wf-y, 0px));
+    }
+  }
+}
+
+// -- Touch slide actions -----------------------------------------------------
+//
+// Flarum's slidable utility moves `.Slidable-content` and reveals whichever
+// `.Slidable-underneath` the drag heads towards. Core hides the underneath
+// layer globally and only styles it inside `.Slidable`, so a card brings its
+// own rules — scoped, so discussion rows are untouched.
+
+.WaterfallCard .Slidable-underneath {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 0;
+  width: 50%;
+  padding: 0;
+  border: 0;
+  color: #fff;
+
+  &.Slidable-underneath--left {
+    left: 0;
+    background: var(--control-danger-color, #d83e3e);
+  }
+
+  &.Slidable-underneath--right {
+    right: 0;
+    background: var(--control-color, #666);
+  }
+
+  // slidable owns the icon's transform (it scales it with the drag), so the
+  // icon cannot also carry a centring translate; a wrapper does that instead.
+  .Slidable-iconWrap {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .icon {
+    transform: scale(0);
+  }
+}
+
+.WaterfallCard .Slidable-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--control-bg);
+  // Vertical scrolling stays the browser's; slidable claims the gesture only
+  // once it sees a horizontal drag.
+  touch-action: pan-y;
+}
+
+// -- Card like control -------------------------------------------------------
+//
+// The pointer equivalent of the left swipe. Quiet by default, with the
+// feedback confined to colour and a 1.08 scale — no layout moves.
+
+.WaterfallCard-like {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: color 150ms ease-out, transform 150ms ease-out;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--control-danger-color, #d83e3e);
+    transform: scale(1.08);
+  }
+
+  &.is-liked {
+    color: var(--control-danger-color, #d83e3e);
+  }
+}
+
+// Pointer devices only: the tags sit back until the card is being looked at.
+// Touch has no hover, so they stay fully legible there.
+@media (hover: hover) {
+  .WaterfallCard-tags {
+    opacity: 0.72;
+    transition: opacity 160ms ease-out;
+  }
+
+  .WaterfallCard:hover .WaterfallCard-tags {
+    opacity: 1;
+  }
+}
+
+// -- Floating upload button --------------------------------------------------
+
+.WaterfallPage-fab {
+  display: none;
+}
+
+@media @phone {
+  .WaterfallGrid-grid {
+    // One column: the card is the full width now, so the breathing room comes
+    // from the picture rather than from the margins.
+    grid-template-columns: 1fr;
+    gap: 10px;
+    --wf-info-height: 76px;
+  }
+
+  // The hero's labelled button is replaced by the floating one; two upload
+  // entries on one screen is one too many.
+  .WaterfallPage-uploadButton {
+    display: none;
+  }
+
+  .WaterfallPage-fab {
+    position: fixed;
+    right: ~"calc(16px + env(safe-area-inset-right, 0px))";
+    bottom: ~"calc(16px + env(safe-area-inset-bottom, 0px))";
+    z-index: 20;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    border-radius: 999px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .WaterfallCard,
+  .WaterfallCard-img,
+  .WaterfallCard-like,
+  .WaterfallCard-tags {
+    transition: none;
+  }
+
+  .WaterfallCard:hover .WaterfallCard-img--loaded,
+  .WaterfallCard-like:hover,
+  .WaterfallCard-like:focus-visible {
+    transform: none;
   }
 }

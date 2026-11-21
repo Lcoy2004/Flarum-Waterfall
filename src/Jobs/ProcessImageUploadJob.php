@@ -225,7 +225,12 @@ class ProcessImageUploadJob extends AbstractJob
             // and the set's aggregate sync move together, and a row that was
             // concurrently deleted or already terminal is reported as moot
             // instead of being republished.
-            $published = $lifecycle->publish($image, $result->src, $thumbSrc);
+            //
+            // The ratio is read from the staged bytes here rather than sent by
+            // the client: the file that was just transferred is the authority
+            // on its own shape, and a hand-written multipart request must not
+            // be able to decide how much height the feed reserves for it.
+            $published = $lifecycle->publish($image, $result->src, $thumbSrc, $this->aspectRatioOf($this->stagedPath));
 
             $log->forceFill([
                 'status' => WaterfallUploadLog::STATUS_SUCCESS,
@@ -402,6 +407,42 @@ class ProcessImageUploadJob extends AbstractJob
     protected function remainingBudget(float $deadline): int
     {
         return (int) max(0, floor($deadline - microtime(true)));
+    }
+
+    /**
+     * The staged image's display aspect ratio (width / height), or null when
+     * its size cannot be read.
+     *
+     * The feed reserves each card's box from this before any bytes arrive, so
+     * an unreadable file costs the layout its exactness rather than the upload
+     * its success — null is a perfectly good answer here.
+     *
+     * Orientation is applied because the browser applies it when painting: a
+     * phone photo stored landscape with Orientation 6 is displayed portrait,
+     * and reporting the stored ratio would hand the card the wrong shape.
+     */
+    protected function aspectRatioOf(string $path): ?float
+    {
+        $size = @getimagesize($path);
+
+        if (! is_array($size) || ($size[0] ?? 0) <= 0 || ($size[1] ?? 0) <= 0) {
+            return null;
+        }
+
+        [$width, $height] = $size;
+
+        if (function_exists('exif_read_data')) {
+            $exif = @exif_read_data($path, 'IFD0');
+            $orientation = (int) ($exif['Orientation'] ?? 0);
+
+            // 5-8 are the transposed orientations: what is displayed is the
+            // stored image turned 90°, so its two sides swap.
+            if (in_array($orientation, [5, 6, 7, 8], true)) {
+                [$width, $height] = [$height, $width];
+            }
+        }
+
+        return round($width / $height, 6);
     }
 
     protected function markFailed(

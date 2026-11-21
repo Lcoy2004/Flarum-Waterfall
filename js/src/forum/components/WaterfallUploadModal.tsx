@@ -96,6 +96,21 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
    */
   protected preparing: Promise<void>[] = [];
 
+  /**
+   * How many files may be decoded and encoded at once.
+   *
+   * Each preparation decodes a full-size image into an ImageBitmap and paints
+   * it through a canvas — tens of megabytes of pixels for a modern phone
+   * photo. Firing one per dropped file meant a batch of thirty started thirty
+   * decodes in the same tick, which blocks the main thread and can exhaust
+   * memory on a mid-range phone. Three keeps the queue moving without that
+   * spike.
+   */
+  protected static readonly PREPARE_CONCURRENCY = 3;
+
+  protected activePrepares = 0;
+  protected waitingPrepares: (() => void)[] = [];
+
   protected keySeq = 0;
 
   className() {
@@ -459,7 +474,7 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
       };
 
       this.queue.push(item);
-      this.preparing.push(this.prepareItem(item));
+      this.preparing.push(this.prepareWithLimit(item));
     }
   }
 
@@ -483,6 +498,43 @@ export default class WaterfallUploadModal<CustomAttrs extends WaterfallUploadMod
 
     this.queue.splice(to, 0, moved);
     m.redraw();
+  }
+
+  /**
+   * Prepare one file, respecting the concurrency budget.
+   *
+   * The wait is a promise rather than a queue of work: the item is already in
+   * `this.queue` (so it is visible and reorderable while it waits), and only
+   * the expensive decode is held back.
+   */
+  protected async prepareWithLimit(item: QueueItem): Promise<void> {
+    await this.acquirePrepareSlot();
+
+    try {
+      await this.prepareItem(item);
+    } finally {
+      this.releasePrepareSlot();
+    }
+  }
+
+  protected acquirePrepareSlot(): Promise<void> {
+    if (this.activePrepares < WaterfallUploadModal.PREPARE_CONCURRENCY) {
+      this.activePrepares++;
+
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve) => {
+      this.waitingPrepares.push(() => {
+        this.activePrepares++;
+        resolve();
+      });
+    });
+  }
+
+  protected releasePrepareSlot(): void {
+    this.activePrepares--;
+    this.waitingPrepares.shift()?.();
   }
 
   /**

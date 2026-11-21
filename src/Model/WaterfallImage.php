@@ -50,6 +50,9 @@ class WaterfallImage extends AbstractModel
         'likes_count' => 'integer',
         'views_count' => 'integer',
         'score' => 'float',
+        // Decimal in the database; the feed multiplies with it (card width /
+        // ratio), so it has to arrive as a number rather than a string.
+        'aspect_ratio' => 'float',
     ];
 
     public function user(): BelongsTo
