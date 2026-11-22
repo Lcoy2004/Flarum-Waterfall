@@ -536,7 +536,7 @@
     // height from its image ratio plus this strip, without measuring anything.
     // `--wf-info-height` is read back by the layout script, so the stylesheet
     // and the geometry can never disagree.
-    height: var(--wf-info-height, 72px);
+    height: var(--wf-info-height, 80px);
     box-sizing: border-box;
     overflow: hidden;
   }
@@ -646,6 +646,12 @@
     // One row. The strip has a fixed height; wrapping a long tag list would
     // push the counters out of it, so extra chips are simply not shown.
     flex-wrap: nowrap;
+    // Never compress this row to make the strip fit. Because the row clips
+    // horizontally (overflow: hidden), a flex container shrinking it would
+    // cut the bottom of the glyphs instead of letting the hairline of slack
+    // go — which is exactly what a just-published card did while showing the
+    // owner's rename affordance.
+    flex-shrink: 0;
     gap: ~"clamp(3px, 0.8cqi + 1px, 4px)";
     margin-top: -2px;
     overflow: hidden;
@@ -1419,7 +1425,12 @@
 .WaterfallGrid-grid {
   // Height of the info strip. Inherited by every card and read back by the
   // layout script, so the geometry and the stylesheet cannot drift apart.
-  --wf-info-height: 72px;
+  //
+  // 80px is the smallest value that holds every row the strip can carry:
+  // the title row (the owner's 24px rename button makes it 21px tall), one
+  // line of tags and the 22px footer, plus the gaps between them. At 72px
+  // the surplus was taken out of the tag row, clipping its descenders.
+  --wf-info-height: 80px;
 
   // Tier 1: the engine balances the columns itself.
   &--native-masonry {
@@ -1550,9 +1561,11 @@
 @media @phone {
   .WaterfallGrid-grid {
     // One column: the card is the full width now, so the breathing room comes
-    // from the picture rather than from the margins.
+    // from the picture rather than from the margins. The strip keeps almost
+    // the desktop height: a phone-width card's rows still need ~76px, so the
+    // old 68px clipped the tags.
     grid-template-columns: 1fr;
-    --wf-info-height: 68px;
+    --wf-info-height: 78px;
   }
 
   // The hero's labelled button is replaced by the floating one; two upload

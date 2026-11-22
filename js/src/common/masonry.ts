@@ -17,7 +17,7 @@
 export const DEFAULT_RATIO = 3 / 4;
 
 /** Info strip height, in px. Kept in sync with `--wf-info-height`. */
-export const INFO_HEIGHT = 72;
+export const INFO_HEIGHT = 80;
 
 export interface Metrics {
   columns: number;
